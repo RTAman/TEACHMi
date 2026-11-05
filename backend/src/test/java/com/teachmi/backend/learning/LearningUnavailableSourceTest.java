@@ -7,6 +7,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -86,6 +87,21 @@ class LearningUnavailableSourceTest {
             assertThat(result.getResponse().getContentAsString()).contains("LEARNING_PROBLEM_INTEGRATION_PENDING");
             assertThat(sessions.findById(session.id).orElseThrow().stage).isEqualTo("problem");
             assertThat(sessions.findById(session.id).orElseThrow().activeReteachId).isNull();
+        } finally { sessions.deleteById(session.id); }
+    }
+
+    @Test
+    void savedEvidenceCanBeReadWithoutAnyAOrCOrGeminiAdapter() throws Exception {
+        var session = sessions.saveAndFlush(new LearningSession("saved-evidence",
+                new CreateSessionRequest("m01", "c01", null, null),
+                "{\"name\":\"저장된 개념\",\"scope\":\"저장된 범위\",\"sourceChunkIds\":[\"k01\"]}"));
+        try {
+            var result = MockMvcBuilders.webAppContextSetup(context).build()
+                    .perform(get("/api/v1/sessions/" + session.id + "/evidence").principal(() -> "saved-evidence"))
+                    .andReturn();
+            assertThat(result.getResponse().getStatus()).isEqualTo(200);
+            assertThat(result.getResponse().getContentAsString()).contains("not_started");
+            assertThat(sessions.findById(session.id).orElseThrow().version).isZero();
         } finally { sessions.deleteById(session.id); }
     }
 }

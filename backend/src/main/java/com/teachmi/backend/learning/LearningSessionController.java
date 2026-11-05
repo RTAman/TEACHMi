@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.CacheControl;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -15,13 +16,15 @@ class LearningSessionController {
     private final ObjectProvider<CurrentMember> members;
     private final LearningTurnService turns;
     private final LearningReteachService reteach;
+    private final LearningEvidenceService evidence;
 
     LearningSessionController(LearningSessionService sessions, ObjectProvider<CurrentMember> members,
-                              LearningTurnService turns, LearningReteachService reteach) {
+                              LearningTurnService turns, LearningReteachService reteach, LearningEvidenceService evidence) {
         this.sessions = sessions;
         this.members = members;
         this.turns = turns;
         this.reteach = reteach;
+        this.evidence = evidence;
     }
 
     @PostMapping
@@ -35,6 +38,12 @@ class LearningSessionController {
     @GetMapping("/{sessionId}")
     SessionView get(HttpServletRequest http, @PathVariable UUID sessionId) {
         return sessions.get(requireMemberId(http), sessionId);
+    }
+
+    @GetMapping("/{sessionId}/evidence")
+    ResponseEntity<LearningEvidenceView> evidence(HttpServletRequest http, @PathVariable UUID sessionId) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(evidence.get(requireMemberId(http), sessionId));
     }
 
     @PostMapping("/{sessionId}/turns")

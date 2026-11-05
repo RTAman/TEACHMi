@@ -14,5 +14,5 @@ import org.springframework.context.annotation.Import;
 @EnableAutoConfiguration
 @Import({LearningSessionController.class, LearningSessionService.class, LearningErrorHandler.class,
         LearningTurnService.class, LearningTurnTransactions.class, LearningReteachService.class,
-        LearningReteachTransactions.class})
+        LearningReteachTransactions.class, LearningEvidenceService.class})
 public class LearningTestApplication {}
