@@ -32,5 +32,8 @@ jobs:
         run: |
           cp .env.example .env
           docker compose up -d --wait db
-      - name: Build and run PostgreSQL integration tests
+      - name: Verify runnable API request examples without network calls
+        shell: pwsh
+        run: ./api/Test-LearningRequest.ps1
+      - name: Build and run PostgreSQL integration and OpenAPI contract tests
         run: ./gradlew --no-daemon build

@@ -1,0 +1,2221 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "TEACHMi backend B HTTP API",
+    "version": "1.0.0",
+    "description": "현재 구현된 B HTTP API만 기술합니다. 모든 동작에 CurrentMember/서버 Principal 인증이 필요합니다. A의 실제 인증 전송 방식이 미정이라 가상의 JWT·쿠키 securityScheme은 선언하지 않습니다. A의 인증·자료/원문 및 C의 실제 문항·평가 연결은 대기 상태입니다. 내부 Java 서비스는 HTTP 경로가 아니며 API_HANDOFF.md를 참고하세요."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "로컬 개발. 실제 서버 URL은 클라이언트에서 지정."
+    }
+  ],
+  "x-authentication": {
+    "required": true,
+    "principal": "CurrentMember.requireId(HttpServletRequest) or authenticated Servlet Principal",
+    "transportStatus": "pending-A-integration"
+  },
+  "x-error-codes-not-exhaustive": true,
+  "paths": {
+    "/api/v1/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "summary": "학습 시작 또는 확인한 기존 학습 교체",
+        "description": "회원별 active 한 건. 새 시작은 기존 세션 ID와 최신 버전을 함께 전달. 같은 키의 성공 재전송은 최초 201 응답.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "저장된 SessionView 또는 같은 키의 과거 성공 응답. 최신 상태는 GET으로 확인.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "pattern": "^/api/v1/sessions/[0-9a-fA-F-]+$"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/GenerationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/active": {
+      "get": {
+        "operationId": "getActiveSession",
+        "summary": "ID 없이 진행 중 학습 발견",
+        "description": "status=active만 조회. problem/active report 포함, completed/abandoned 제외. 조회는 AI 호출·변경 없음.",
+        "responses": {
+          "200": {
+            "description": "기존 ID 조회와 같은 복원 스냅샷.",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "진행 중 학습 없음. 빈 본문.",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "get": {
+        "operationId": "getSession",
+        "summary": "저장된 학습 조회·복원",
+        "responses": {
+          "200": {
+            "description": "소유한 학습의 현재 스냅샷. 종료 기록도 조회 가능.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/mode": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "put": {
+        "operationId": "chooseLearningMode",
+        "summary": "처음 학습·복습 선택",
+        "description": "first는 summary, review는 첫 질문을 저장하고 chat. 생성에는 A 원문 연결과 Gemini 구성이 필요.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChooseModeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "저장된 SessionView 또는 같은 키의 과거 성공 응답. 최신 상태는 GET으로 확인.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/GenerationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/chat/start": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "startLearningChat",
+        "summary": "처음 학습 요약 후 설명 시작",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartChatRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "저장된 SessionView 또는 같은 키의 과거 성공 응답. 최신 상태는 GET으로 확인.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/GenerationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/turns": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "sendLearningTurn",
+        "summary": "답변·힌트·쉬운 예시·모르겠어요",
+        "description": "입력을 먼저 저장. 충분한 answer만 case→concept→reason→wrapup→problem. 도움은 단계 유지. 실패 후 pendingTurn의 원래 키/expectedVersion/text로 재전송; GET version으로 본문을 바꾸지 마세요.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TurnRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "저장된 SessionView 또는 같은 키의 과거 성공 응답. 최신 상태는 GET으로 확인.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/GenerationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/reteach": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "startReteach",
+        "summary": "현재 오답에서 재설명 시작",
+        "description": "C가 소유권·현재 오답을 확인해야 함. C 미연결은 503. 실패/만료 시작은 activeReteach의 원래 키·버전·문항·시도로 재시도.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartReteachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "저장된 SessionView 또는 같은 키의 과거 성공 응답. 최신 상태는 GET으로 확인.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/GenerationFailed"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/evidence": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "get": {
+        "operationId": "getLearningEvidence",
+        "summary": "C 평가·리포트용 실제 설명·도움 근거",
+        "description": "AI 호출 없음. 최초 학습/재설명 분리. requested와 실제 delivered 구분. completed는 설명 완료이며 독립 평가 정답이 아님.",
+        "responses": {
+          "200": {
+            "description": "세션 version에 대응하는 근거 스냅샷.",
+            "headers": {
+              "Cache-Control": {
+                "required": true,
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "no-store"
+                  ]
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningEvidenceView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/EvidenceInconsistent"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "SessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "회원별 작업 키. 같은 동작 재시도는 키·본문·원래 버전 유지. 누락/잘못된 값은 B가 422로 처리.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Spring MVC의 JSON·UUID·타입 바인딩 오류. 본문은 없거나 프레임워크별로 달라질 수 있어 고정 ErrorBody로 가정하지 마세요.",
+        "x-body-optional": true,
+        "content": {
+          "*/*": {
+            "schema": {}
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "현재 회원 인증 필요.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "UNAUTHENTICATED"
+        ]
+      },
+      "NotFound": {
+        "description": "없거나 다른 회원 소유인 학습·자료·원문·문항.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "NOT_FOUND"
+        ]
+      },
+      "Conflict": {
+        "description": "단계·버전 충돌 또는 요청 키 재사용. currentSession 또는 GET으로 확인.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "ACTIVE_SESSION_EXISTS",
+          "REPLACEMENT_CHANGED",
+          "SESSION_STATE_CONFLICT",
+          "IDEMPOTENCY_KEY_REUSED",
+          "WRONG_ATTEMPT_REQUIRED",
+          "RETEACH_ALREADY_EXISTS",
+          "RETEACH_ORIGIN_CHANGED"
+        ]
+      },
+      "InvalidRequest": {
+        "description": "요청 검증·Idempotency-Key·원문/문맥 범위 오류.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "INVALID_REQUEST",
+          "INVALID_IDEMPOTENCY_KEY",
+          "LEARNING_SOURCE_TOO_LARGE",
+          "DIALOGUE_CONTEXT_TOO_LARGE"
+        ]
+      },
+      "RateLimited": {
+        "description": "사용량/시도 제한 또는 재시도 대기.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "AI_USAGE_LIMIT",
+          "AI_ATTEMPT_LIMIT",
+          "GEMINI_RATE_LIMITED",
+          "AI_RETRY_LATER"
+        ]
+      },
+      "GenerationFailed": {
+        "description": "AI·출처·응답 검증 실패. 입력이 저장됐으면 원래 요청으로 재시도.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "LEARNING_CONTENT_FAILED",
+          "INVALID_LEARNING_CONTENT",
+          "INVALID_DIALOGUE_REPLY",
+          "DIALOGUE_GENERATION_FAILED",
+          "RETEACH_GENERATION_FAILED",
+          "INVALID_GEMINI_RESPONSE",
+          "INVALID_RETEACH_FOCUS",
+          "GEMINI_INVALID_REQUEST",
+          "GEMINI_ACCESS_DENIED",
+          "GEMINI_MODEL_NOT_FOUND",
+          "GEMINI_REQUEST_REJECTED"
+        ]
+      },
+      "Unavailable": {
+        "description": "A/C/생성기 연결 대기·구성 누락·생성 중·불확실한 원격 결과. 자동 반복 호출하지 마세요.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "CONCEPT_SOURCE_UNAVAILABLE",
+          "LEARNING_CONTENT_UNAVAILABLE",
+          "LEARNING_DIALOGUE_UNAVAILABLE",
+          "RETEACH_GENERATOR_UNAVAILABLE",
+          "LEARNING_SOURCE_INTEGRATION_PENDING",
+          "LEARNING_PROBLEM_INTEGRATION_PENDING",
+          "LEARNING_SOURCE_INCOMPLETE",
+          "GEMINI_CONFIGURATION_REQUIRED",
+          "TURN_IN_PROGRESS",
+          "RETEACH_IN_PROGRESS",
+          "AI_GENERATION_IN_PROGRESS",
+          "AI_GENERATION_UNCERTAIN"
+        ]
+      },
+      "EvidenceInconsistent": {
+        "description": "저장된 근거 참조 오류.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        },
+        "x-error-codes": [
+          "LEARNING_EVIDENCE_INCONSISTENT"
+        ]
+      }
+    },
+    "schemas": {
+      "CreateSessionRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "materialId",
+          "conceptId"
+        ],
+        "properties": {
+          "materialId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "conceptId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "replaceSessionId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0,
+            "nullable": true
+          }
+        },
+        "description": "replaceSessionId와 expectedVersion은 함께 생략/null 또는 함께 실제 값. 새 시작 확인 후 최신 세션 ID·버전을 전달합니다.",
+        "oneOf": [
+          {
+            "properties": {
+              "replaceSessionId": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              },
+              "expectedVersion": {
+                "type": "integer",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            },
+            "additionalProperties": true
+          },
+          {
+            "required": [
+              "replaceSessionId",
+              "expectedVersion"
+            ],
+            "properties": {
+              "replaceSessionId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "expectedVersion": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": true
+          }
+        ]
+      },
+      "ChooseModeRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "mode",
+          "expectedVersion"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "first",
+              "review"
+            ]
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "StartChatRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TurnRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "kind",
+          "expectedVersion"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "hint",
+              "example",
+              "dont_know"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 4000
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "text"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "answer"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000,
+                "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$"
+              }
+            },
+            "additionalProperties": true
+          },
+          {
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "hint",
+                  "example",
+                  "dont_know"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            },
+            "additionalProperties": true
+          }
+        ],
+        "description": "answer는 공백·NUL이 아닌 1~4000자 text 필요. 도움은 text 생략 또는 null. 재시도는 원래 키·본문·expectedVersion 그대로."
+      },
+      "StartReteachRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "problemId",
+          "attemptId",
+          "expectedVersion"
+        ],
+        "properties": {
+          "problemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "attemptId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ConceptSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "scope",
+          "sourceChunkIds"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Summary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "examples",
+          "keyTerms",
+          "reflectionPrompt",
+          "sourceChunkIds"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "keyTerms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "reflectionPrompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "Resume": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "path"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "mode",
+              "summary",
+              "chat",
+              "problem",
+              "report"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "LearningMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "messageId",
+          "sequence",
+          "role",
+          "kind",
+          "chatStage",
+          "text",
+          "sourceChunkIds",
+          "createdAt",
+          "supportEventId"
+        ],
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "case_question",
+              "reteach_question",
+              "answer",
+              "hint",
+              "example",
+              "dont_know",
+              "followup_question",
+              "stage_question",
+              "wrapup_question",
+              "learning_complete",
+              "reteach_complete"
+            ]
+          },
+          "chatStage": {
+            "type": "string",
+            "enum": [
+              "case",
+              "concept",
+              "reason",
+              "wrapup"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supportEventId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "SupportEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "eventId",
+          "kind",
+          "targetMessageId",
+          "requestMessageId",
+          "responseMessageId",
+          "createdAt"
+        ],
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hint",
+              "example",
+              "dont_know"
+            ]
+          },
+          "targetMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requestMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "responseMessageId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "TurnProgress": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "turnId",
+          "kind",
+          "state",
+          "userMessageId",
+          "errorCode",
+          "idempotencyKey",
+          "expectedVersion"
+        ],
+        "properties": {
+          "turnId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "hint",
+              "example",
+              "dont_know"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "userMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ReteachView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reteachId",
+          "problemId",
+          "attemptId",
+          "focus",
+          "state",
+          "questionMessageId",
+          "initialAnswerId",
+          "finalExplanationId",
+          "createdAt",
+          "completedAt",
+          "idempotencyKey",
+          "expectedVersion",
+          "errorCode"
+        ],
+        "properties": {
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "problemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "attemptId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "focus": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "chat",
+              "returned",
+              "interrupted"
+            ]
+          },
+          "questionMessageId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "initialAnswerId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "finalExplanationId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "ProblemReturn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reteachId",
+          "problemId",
+          "originAttemptId",
+          "path"
+        ],
+        "properties": {
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "problemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "originAttemptId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionId",
+          "materialId",
+          "conceptId",
+          "concept",
+          "mode",
+          "stage",
+          "status",
+          "version",
+          "createdAt",
+          "updatedAt",
+          "resume",
+          "summary",
+          "chatStage",
+          "messages",
+          "initialAnswerId",
+          "finalExplanationId",
+          "supportEvents",
+          "pendingTurn",
+          "availableActions",
+          "activeReteach",
+          "problemReturn",
+          "reteachHistory"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "materialId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "conceptId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "concept": {
+            "$ref": "#/components/schemas/ConceptSnapshot"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "first",
+              "review",
+              null
+            ],
+            "nullable": true
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "mode",
+              "summary",
+              "chat",
+              "problem",
+              "report"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "abandoned",
+              "completed"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resume": {
+            "$ref": "#/components/schemas/NullableResume"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/NullableSummary"
+          },
+          "chatStage": {
+            "type": "string",
+            "enum": [
+              "case",
+              "concept",
+              "reason",
+              "wrapup",
+              null
+            ],
+            "nullable": true
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LearningMessage"
+            }
+          },
+          "initialAnswerId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "finalExplanationId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "supportEvents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportEvent"
+            }
+          },
+          "pendingTurn": {
+            "$ref": "#/components/schemas/NullableTurnProgress"
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "select_mode",
+                "start_chat",
+                "answer",
+                "hint",
+                "example",
+                "dont_know",
+                "wait",
+                "retry_turn",
+                "retry_reteach",
+                "start_problems",
+                "retry_problem",
+                "view_report"
+              ]
+            }
+          },
+          "activeReteach": {
+            "$ref": "#/components/schemas/NullableReteachView"
+          },
+          "problemReturn": {
+            "$ref": "#/components/schemas/NullableProblemReturn"
+          },
+          "reteachHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReteachView"
+            }
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "currentSession"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "currentSession": {
+            "$ref": "#/components/schemas/NullableSessionView"
+          }
+        },
+        "description": "B의 LearningException/입력 검증 응답. 오류 코드와 복원할 currentSession을 사용하세요. Spring이 처리하는 400/405/415 본문 규격은 별도이며 고정되지 않았습니다."
+      },
+      "SupportCounts": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total",
+          "hint",
+          "example",
+          "dontKnow"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "hint": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "example": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "dontKnow": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "SupportUsage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "requested",
+          "delivered",
+          "events"
+        ],
+        "properties": {
+          "requested": {
+            "$ref": "#/components/schemas/SupportCounts"
+          },
+          "delivered": {
+            "$ref": "#/components/schemas/SupportCounts"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportEvent"
+            }
+          }
+        }
+      },
+      "ExplanationEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "initialAnswer",
+          "finalExplanation",
+          "support"
+        ],
+        "properties": {
+          "initialAnswer": {
+            "$ref": "#/components/schemas/NullableLearningMessage"
+          },
+          "finalExplanation": {
+            "$ref": "#/components/schemas/NullableLearningMessage"
+          },
+          "support": {
+            "$ref": "#/components/schemas/SupportUsage"
+          }
+        }
+      },
+      "OriginalLearning": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "evidence"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "in_progress",
+              "completed",
+              "interrupted"
+            ]
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ExplanationEvidence"
+          }
+        }
+      },
+      "ReteachEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reteachId",
+          "problemId",
+          "originAttemptId",
+          "focus",
+          "state",
+          "createdAt",
+          "completedAt",
+          "evidence"
+        ],
+        "properties": {
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "problemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "originAttemptId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "focus": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "chat",
+              "returned",
+              "interrupted"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/ExplanationEvidence"
+          }
+        }
+      },
+      "PendingGeneration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "id",
+          "reteachId",
+          "state",
+          "errorCode"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "turn",
+              "reteach"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reteachId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LearningEvidenceView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schemaVersion",
+          "sessionId",
+          "version",
+          "materialId",
+          "conceptId",
+          "concept",
+          "mode",
+          "stage",
+          "status",
+          "updatedAt",
+          "originalLearning",
+          "reteachHistory",
+          "pendingGeneration"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "enum": [
+              1
+            ]
+          },
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "materialId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "conceptId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "concept": {
+            "$ref": "#/components/schemas/ConceptSnapshot"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "first",
+              "review",
+              null
+            ],
+            "nullable": true
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "mode",
+              "summary",
+              "chat",
+              "problem",
+              "report"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "abandoned",
+              "completed"
+            ]
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "originalLearning": {
+            "$ref": "#/components/schemas/OriginalLearning"
+          },
+          "reteachHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReteachEvidence"
+            }
+          },
+          "pendingGeneration": {
+            "$ref": "#/components/schemas/NullablePendingGeneration"
+          }
+        }
+      },
+      "NullableResume": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "path"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "mode",
+              "summary",
+              "chat",
+              "problem",
+              "report"
+            ]
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "nullable": true
+      },
+      "NullableSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "examples",
+          "keyTerms",
+          "reflectionPrompt",
+          "sourceChunkIds"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "examples": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "keyTerms": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "reflectionPrompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "nullable": true
+      },
+      "NullableTurnProgress": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "turnId",
+          "kind",
+          "state",
+          "userMessageId",
+          "errorCode",
+          "idempotencyKey",
+          "expectedVersion"
+        ],
+        "properties": {
+          "turnId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "answer",
+              "hint",
+              "example",
+              "dont_know"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "userMessageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "nullable": true
+      },
+      "NullableReteachView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reteachId",
+          "problemId",
+          "attemptId",
+          "focus",
+          "state",
+          "questionMessageId",
+          "initialAnswerId",
+          "finalExplanationId",
+          "createdAt",
+          "completedAt",
+          "idempotencyKey",
+          "expectedVersion",
+          "errorCode"
+        ],
+        "properties": {
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "problemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "attemptId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "focus": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "chat",
+              "returned",
+              "interrupted"
+            ]
+          },
+          "questionMessageId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "initialAnswerId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "finalExplanationId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "nullable": true
+      },
+      "NullableProblemReturn": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reteachId",
+          "problemId",
+          "originAttemptId",
+          "path"
+        ],
+        "properties": {
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "problemId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "originAttemptId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "nullable": true
+      },
+      "NullableSessionView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sessionId",
+          "materialId",
+          "conceptId",
+          "concept",
+          "mode",
+          "stage",
+          "status",
+          "version",
+          "createdAt",
+          "updatedAt",
+          "resume",
+          "summary",
+          "chatStage",
+          "messages",
+          "initialAnswerId",
+          "finalExplanationId",
+          "supportEvents",
+          "pendingTurn",
+          "availableActions",
+          "activeReteach",
+          "problemReturn",
+          "reteachHistory"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "materialId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "conceptId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "concept": {
+            "$ref": "#/components/schemas/ConceptSnapshot"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "first",
+              "review",
+              null
+            ],
+            "nullable": true
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "mode",
+              "summary",
+              "chat",
+              "problem",
+              "report"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "abandoned",
+              "completed"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resume": {
+            "$ref": "#/components/schemas/NullableResume"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/NullableSummary"
+          },
+          "chatStage": {
+            "type": "string",
+            "enum": [
+              "case",
+              "concept",
+              "reason",
+              "wrapup",
+              null
+            ],
+            "nullable": true
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LearningMessage"
+            }
+          },
+          "initialAnswerId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "finalExplanationId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "supportEvents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SupportEvent"
+            }
+          },
+          "pendingTurn": {
+            "$ref": "#/components/schemas/NullableTurnProgress"
+          },
+          "availableActions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "select_mode",
+                "start_chat",
+                "answer",
+                "hint",
+                "example",
+                "dont_know",
+                "wait",
+                "retry_turn",
+                "retry_reteach",
+                "start_problems",
+                "retry_problem",
+                "view_report"
+              ]
+            }
+          },
+          "activeReteach": {
+            "$ref": "#/components/schemas/NullableReteachView"
+          },
+          "problemReturn": {
+            "$ref": "#/components/schemas/NullableProblemReturn"
+          },
+          "reteachHistory": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReteachView"
+            }
+          }
+        },
+        "nullable": true
+      },
+      "NullableLearningMessage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "messageId",
+          "sequence",
+          "role",
+          "kind",
+          "chatStage",
+          "text",
+          "sourceChunkIds",
+          "createdAt",
+          "supportEventId"
+        ],
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "case_question",
+              "reteach_question",
+              "answer",
+              "hint",
+              "example",
+              "dont_know",
+              "followup_question",
+              "stage_question",
+              "wrapup_question",
+              "learning_complete",
+              "reteach_complete"
+            ]
+          },
+          "chatStage": {
+            "type": "string",
+            "enum": [
+              "case",
+              "concept",
+              "reason",
+              "wrapup"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "supportEventId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "reteachId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "nullable": true
+      },
+      "NullablePendingGeneration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "id",
+          "reteachId",
+          "state",
+          "errorCode"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "turn",
+              "reteach"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reteachId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generating",
+              "failed",
+              "interrupted"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "nullable": true
+      }
+    }
+  }
+}

@@ -63,6 +63,8 @@ C의 평가·리포트 DB 저장과 B의 report·completed 상태를 함께 전�
 
 ## DB 변경과 빌드
 
+프론트·A·C 인수인계는 [B API 명세와 실행 예시](API_HANDOFF.md)를 확인하세요. [OpenAPI JSON](api/openapi.json)과 실제 인증 정보를 전달받는 PowerShell 요청 도구를 제공하며, 명세·HTTP 응답 및 예제 도구를 CI에서 검증합니다.
+
 서버 시작 시 Flyway가 `src/main/resources/db/migration/`의 SQL을 순서대로 적용합니다. V1은 업무 테이블을 담을 `teachmi` 스키마를 만듭니다. 새 테이블은 `teachmi.테이블명`으로 지정하고 `V2__create_users.sql` 같은 새 파일에 작성합니다. 다음 버전 번호와 병합 순서는 PR에서 C와 맞추고, 적용된 SQL은 새 버전으로 수정합니다. Hibernate는 엔티티와 실제 스키마가 일치하는지 검사합니다.
 
 DB가 실행 중인 상태에서 `backend/`에서 Windows는 `.\gradlew.bat build`, macOS·Linux는 `./gradlew build`를 실행하세요. 테스트는 실제 PostgreSQL의 마이그레이션 이력과 서버의 HTTP 상태 응답을 확인합니다. 빌드한 실행용 JAR은 `build/libs/teachmi-backend-0.0.1-SNAPSHOT.jar`입니다. GitHub Actions도 백엔드 PR마다 같은 Compose DB로 빌드와 테스트를 실행합니다.
