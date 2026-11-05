@@ -114,7 +114,47 @@ POST의 `Idempotency-Key`는 회원별로 구분하며 1~128자입니다. 한 �
 
 대화의 최초·최종 설명 ID, 도움 이벤트, 재시도 중인 전송 상태는 [대화 API 계약](CONVERSATION_TURNS.md)을 확인하세요.
 
-C는 홈에서 회원의 진행 중 세션 ID를 전달하고, 프론트엔드는 그 ID로 GET을 호출해 재개합니다. 서버 내부에서는 `LearningSessionService.get(memberId, sessionId)`로 같은 소유권 검사를 적용할 수 있습니다.
+C는 아래 진행 중 학습 조회로 세션 ID를 찾고 홈 응답에 연결할 수 있습니다. 프론트엔드는 반환된 상태를 사용하거나 해당 ID로 기존 GET을 호출해 재개합니다. 서버 내부에서는 `LearningSessionService.get(memberId, sessionId)`로 같은 소유권 검사를 적용할 수 있습니다.
+
+### 세션 ID 없이 진행 중 학습 찾기
+
+```http
+GET /api/v1/sessions/active
+```
+
+기존 CurrentMember 또는 인증된 서버 Principal의 회원 ID만 사용합니다. 클라이언트의 memberId 파라미터로 조회 대상을 바꾸지 않습니다. Idempotency-Key와 본문은 필요하지 않습니다.
+
+| 응답 | 의미 |
+| --- | --- |
+| 200 SessionView | 현재 회원의 status=active인 학습 한 건 |
+| 204, 빈 본문 | 진행 중 학습이 없음; 학습을 새로 만들거나 과거 기록을 대신 반환하지 않음 |
+| 401 | 인증 정보가 없거나 유효하지 않음 |
+
+200과 204 모두 Cache-Control: no-store입니다. `/active`는 고정 경로이며 UUID 세션 조회와 구분합니다. 기존 세션 API와 SessionView 규격은 유지합니다.
+
+200 본문은 같은 시점의 `GET /api/v1/sessions/{sessionId}`와 동일한 SessionView입니다. sessionId·자료/개념·mode·stage·version·resume·availableActions뿐 아니라 요약·대화·도움·미완료 전송·재설명·문항 복귀 정보도 포함합니다. resume.path는 복원할 **API 경로**입니다. 프론트의 실제 화면 경로는 프론트 라우터에 연결하세요.
+
+- 모드 미선택은 select_mode, 처음 학습 요약은 start_chat을 제공합니다.
+- 대화 생성 중에는 wait, 실패·임대 만료 시에는 retry_turn을 제공합니다. pendingTurn의 저장된 입력 ID·원래 키·원래 expectedVersion으로 재시도합니다.
+- 재설명 첫 질문 생성 중·실패·임대 만료도 activeReteach에서 복원합니다. 재시도에는 activeReteach의 원래 키·버전·문항·시도를 사용합니다.
+- 재설명 완료 후 같은 문항 복귀는 problemReturn과 retry_problem을 유지합니다.
+- status가 completed 또는 abandoned인 세션은 제외합니다. problem 단계나 아직 active인 report 단계는 계속 조회 대상입니다. 설명 대화가 완료됐다는 이유만으로 세션을 종료된 것으로 판단하지 않습니다.
+
+C의 홈에서 사용할 공통 서비스는 다음과 같습니다.
+
+```java
+Optional<SessionView> active = learningSessionService.getActive(currentMemberId);
+```
+
+currentMemberId는 서버 인증에서 얻습니다. C는 자기 홈 응답에 필요한 sessionId·mode·stage·resume·availableActions 등을 반영하고, 비어 있으면 진행 중 학습이 없는 상태를 표시하세요. A·C·Gemini 생성 어댑터가 아직 없어도 저장된 학습은 읽을 수 있습니다. 이 조회는 해당 어댑터의 구현 완료를 의미하지 않습니다.
+
+조회는 별도 REQUIRES_NEW·readOnly·REPEATABLE_READ 트랜잭션에서 수행해 C의 기존 READ_COMMITTED 트랜잭션 안에서도 세션과 복원 기록이 같은 커밋 스냅샷을 사용합니다. 바깥 트랜잭션의 미커밋 B 변경은 보이지 않으므로 B 변경 커밋 후 호출하세요. 바깥 트랜잭션이 있다면 조회용 DB 연결 한 개가 추가로 필요합니다.
+
+쓰기 잠금·AI 호출·버전 갱신·요청 이력 저장은 하지 않습니다. 기존 회원별 active 고유 인덱스를 사용하므로 DB 마이그레이션과 새 환경 변수도 없습니다. 동시에 새 학습으로 교체하면 조회 시작 시점의 이전 세션이 반환될 수 있습니다. 이후 변경 요청에 409가 발생하면 다시 active 또는 기존 GET으로 상태를 확인하세요. 조회 결과가 이후 쓰기의 성공을 보장하지는 않습니다.
+
+실제 PostgreSQL 테스트에서 회원 격리·빈 결과·종료 기록 제외·기존 단계/실패/재설명 복원·읽기 전용·앱 재기동과 동시 세션 교체 중 스냅샷을 검증합니다. C의 실제 종료/리포트 구현과 프론트 홈 연결은 각 담당자의 후속 작업입니다.
+
+### DB 변경
 
 `V2__create_learning_sessions.sql`에 B의 세션과 생성 요청 재시도 테이블을 정의했습니다. 회원·자료·개념 FK는 A의 ID 타입과 테이블명이 확정되면 별도 마이그레이션에서 연결합니다. PR 병합 전 A·C의 마이그레이션과 V2 번호 충돌을 확인하세요.
 
