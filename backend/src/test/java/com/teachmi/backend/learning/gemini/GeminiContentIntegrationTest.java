@@ -56,19 +56,29 @@ class GeminiContentIntegrationTest {
     @Autowired PlatformTransactionManager transactionManager;
     @Autowired DataSourceProperties database;
     @MockitoBean GeminiTransport transport;
+    @MockitoBean ReteachProblemSource problems;
     MockMvc mvc;
     String id;
 
     @BeforeEach
     void setup() throws Exception {
-        jdbc.execute("TRUNCATE teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_ai_call, teachmi.learning_ai_generation, "
+        jdbc.execute("TRUNCATE teachmi.learning_reteach, teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_ai_call, teachmi.learning_ai_generation, "
                 + "teachmi.learning_session_request, teachmi.learning_message, teachmi.learning_session");
         sources.override = null;
+        doAnswer(call -> new ReteachProblemSource.Target(call.getArgument(0), call.getArgument(1),
+                call.getArgument(2), call.getArgument(3), "wrong", "정액법에서 사용 기간에 배분하는 이유"))
+                .when(problems).loadWrongAttempt(anyString(), org.mockito.ArgumentMatchers.any(UUID.class), anyString(), anyString());
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
         doAnswer(call -> {
             var request = json.readTree(call.getArgument(0, String.class));
             var data = json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
             assertThat(data.path("lectureExcerpts").get(0).path("text").asText()).isEqualTo(GeminiFixtures.SOURCE);
+            if (data.path("operation").asText().equals("reteach_question")) {
+                assertThat(data.path("reteach").size()).isEqualTo(2);
+                assertThat(data.path("reteach").has("problemId")).isFalse();
+                assertThat(data.path("reteach").has("solution")).isFalse();
+                assertThat(data.path("reteach").path("focus").asText()).contains("배분");
+            }
             if (data.path("operation").asText().equals("dialogue")) {
                 assertThat(data.path("dialogue").path("targetQuestion").path("messageId").isString()).isTrue();
                 return GeminiFixtures.dialogueResponse(json, data.path("dialogue").path("kind").asText().equals("answer"));
@@ -163,6 +173,47 @@ class GeminiContentIntegrationTest {
         return mvc.perform(post("/api/v1/sessions/" + id + "/turns").principal(() -> "u1")
                 .header("Idempotency-Key", key).contentType("application/json")
                 .content(json.writeValueAsString(new TurnRequest(kind, text, 1L)))).andReturn();
+    }
+
+    @Test
+    void geminiReteachOpeningAndHelpUseOnlyTheNewRemediationTranscript() throws Exception {
+        mode("review", "review");
+        jdbc.update("UPDATE teachmi.learning_session SET stage='problem' WHERE id=?", UUID.fromString(id));
+        var begun = mvc.perform(post("/api/v1/sessions/" + id + "/reteach").principal(() -> "u1")
+                .header("Idempotency-Key", "reteach").contentType("application/json")
+                .content("{\"problemId\":\"p01\",\"attemptId\":\"a01\",\"expectedVersion\":1}")).andReturn();
+        assertThat(begun.getResponse().getStatus()).isEqualTo(200);
+        var prepared = json.readTree(begun.getResponse().getContentAsByteArray());
+        assertThat(prepared.path("activeReteach").path("problemId").asText()).isEqualTo("p01");
+        var helped = mvc.perform(post("/api/v1/sessions/" + id + "/turns").principal(() -> "u1")
+                .header("Idempotency-Key", "reteach-help").contentType("application/json")
+                .content(json.writeValueAsString(new TurnRequest("hint", null, prepared.path("version").asLong()))))
+                .andReturn();
+        assertThat(helped.getResponse().getStatus()).isEqualTo(200);
+        var state = json.readTree(helped.getResponse().getContentAsByteArray());
+        assertThat(state.path("supportEvents").get(0).path("reteachId"))
+                .isEqualTo(prepared.path("activeReteach").path("reteachId"));
+        verify(transport, times(3)).generate(anyString());
+    }
+
+    @Test
+    void reteachOpeningReusesTheSavedGeminiResultAfterCChangesAndRecovers() throws Exception {
+        mode("review", "review");
+        jdbc.update("UPDATE teachmi.learning_session SET stage='problem' WHERE id=?", UUID.fromString(id));
+        var wrong = new ReteachProblemSource.Target("u1", UUID.fromString(id), "p01", "a01", "wrong",
+                "정액법에서 사용 기간에 배분하는 이유");
+        var corrected = new ReteachProblemSource.Target("u1", UUID.fromString(id), "p01", "a01", "correct", wrong.focus());
+        doReturn(wrong, corrected, wrong).when(problems).loadWrongAttempt(
+                anyString(), org.mockito.ArgumentMatchers.any(UUID.class), anyString(), anyString());
+        var request = new StartReteachRequest("p01", "a01", 1L);
+        var endpoint = "/api/v1/sessions/" + id + "/reteach";
+        var failed = mvc.perform(post(endpoint).principal(() -> "u1").header("Idempotency-Key", "retry-reteach")
+                .contentType("application/json").content(json.writeValueAsString(request))).andReturn();
+        assertThat(failed.getResponse().getStatus()).isEqualTo(409);
+        var retried = mvc.perform(post(endpoint).principal(() -> "u1").header("Idempotency-Key", "retry-reteach")
+                .contentType("application/json").content(json.writeValueAsString(request))).andReturn();
+        assertThat(retried.getResponse().getStatus()).isEqualTo(200);
+        verify(transport, times(2)).generate(anyString());
     }
 
     @Test

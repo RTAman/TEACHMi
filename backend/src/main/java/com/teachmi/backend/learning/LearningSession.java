@@ -34,6 +34,8 @@ class LearningSession {
     @Column UUID pendingTurnId;
     @Column UUID initialAnswerId;
     @Column UUID finalExplanationId;
+    @Column UUID activeReteachId;
+    @Column UUID returnReteachId;
     @Version
     long version;
     @Column(nullable = false)
@@ -59,6 +61,8 @@ class LearningSession {
     void abandon() {
         status = "abandoned";
         pendingTurnId = null;
+        activeReteachId = null;
+        returnReteachId = null;
         updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 
@@ -83,13 +87,14 @@ class LearningSession {
             case "reason" -> chatStage = "wrapup";
             case "wrapup" -> {
                 stage = "problem";
-                finalExplanationId = messageId;
+                if (activeReteachId == null) finalExplanationId = messageId;
             }
             default -> throw new IllegalStateException("Invalid conversation stage");
         }
     }
 
     void touch() {
-        updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        var now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        updatedAt = now.isAfter(updatedAt) ? now : updatedAt.plusNanos(1000);
     }
 }
