@@ -9,7 +9,7 @@
 | 기획 | [프로젝트 기획안](./1호선톤%203팀%20프로젝트%20기획안%20초안.pdf) · [이슈](https://github.com/RTAman/TEACHMi/issues) | 가입 방식, 지원 파일 형식·용량, 시연 문항 수를 결정해 해당 이슈에 기록 |
 | 디자인 | [디자인](https://www.figma.com/design/dZTY1TqL3ceEXh8QOU3TD7/TEACHMi?node-id=78-2345) · [와이어프레임](https://www.figma.com/design/dZTY1TqL3ceEXh8QOU3TD7/TEACHMi?t=YqHTj1YkmmMkIO3y-1) | 로그인, 자료 분석 중·실패, 학습 이어하기 화면의 Figma 노드와 동작을 프론트엔드에 전달 |
 | 프론트엔드 | [frontend/](./frontend/) | 가입 → 업로드 → 학습 → 리포트 화면을 연결하고 각 화면에 필요한 응답 예시를 백엔드와 합의 |
-| 백엔드 | [backend/](./backend/) · [공통 계획서](./TEACHMi%20백엔드%20작업%20계획서.docx) | A는 인증·자료, B는 학습·대화, C는 홈·평가·리포트·배포 담당 |
+| 백엔드 | [Spring Boot·PostgreSQL 실행 가이드](./backend/README.md) · [공통 계획서](./TEACHMi%20백엔드%20작업%20계획서.docx) | A는 인증·자료, B는 학습·대화, C는 홈·평가·리포트·배포 담당 |
 
 ## 팀 작업 방법
 
