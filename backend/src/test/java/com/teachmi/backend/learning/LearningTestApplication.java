@@ -13,4 +13,4 @@ import org.springframework.context.annotation.Import;
 @Configuration(proxyBeanMethods = false)
 @EnableAutoConfiguration
 @Import({LearningSessionController.class, LearningSessionService.class, LearningErrorHandler.class})
-class LearningTestApplication {}
+public class LearningTestApplication {}

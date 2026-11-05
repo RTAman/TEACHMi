@@ -24,3 +24,17 @@ management:
     web:
       exposure:
         include: health
+
+teachmi:
+  gemini:
+    enabled: ${GEMINI_ENABLED:false}
+    api-key: ${GEMINI_API_KEY:}
+    model: ${GEMINI_MODEL:}
+    connect-timeout-seconds: ${GEMINI_CONNECT_TIMEOUT_SECONDS:3}
+    request-timeout-seconds: ${GEMINI_REQUEST_TIMEOUT_SECONDS:20}
+    requests-per-minute: ${GEMINI_REQUESTS_PER_MINUTE:10}
+    requests-per-day: ${GEMINI_REQUESTS_PER_DAY:100}
+    member-requests-per-day: ${GEMINI_MEMBER_REQUESTS_PER_DAY:20}
+    max-attempts: ${GEMINI_MAX_ATTEMPTS:2}
+    max-source-chars: ${GEMINI_MAX_SOURCE_CHARS:16000}
+    max-output-tokens: ${GEMINI_MAX_OUTPUT_TOKENS:2048}

@@ -1,0 +1,105 @@
+package com.teachmi.backend.learning.gemini;
+
+import java.util.UUID;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import com.zaxxer.hikari.HikariDataSource;
+import com.teachmi.backend.learning.LearningContentGenerator.Context;
+import com.teachmi.backend.learning.LearningException;
+
+/**
+ * These transactions survive a surrounding session transaction rolling back.
+ * No FK to a session row is taken here, avoiding locks held by the caller.
+ */
+public class GeminiLedger implements AutoCloseable {
+    private final JdbcTemplate jdbc;
+    private final GeminiSettings settings;
+    private final HikariDataSource pool;
+    private final TransactionTemplate transaction;
+
+    GeminiLedger(DataSourceProperties database, GeminiSettings settings) {
+        this.pool = database.initializeDataSourceBuilder().type(HikariDataSource.class).build();
+        pool.setPoolName("GeminiLedger");
+        pool.setMaximumPoolSize(2);
+        pool.setMinimumIdle(0);
+        pool.setConnectionTimeout(3000);
+        this.jdbc = new JdbcTemplate(pool);
+        this.transaction = new TransactionTemplate(new DataSourceTransactionManager(pool));
+        transaction.setTimeout(5);
+        this.settings = settings;
+    }
+
+    public String claim(String key, Context context, int inputBytes) {
+        return transaction.execute(status -> claimInside(key, context, inputBytes));
+    }
+
+    private String claimInside(String key, Context context, int inputBytes) {
+        // Serialize project-wide quota reservations across all backend instances sharing this DB.
+        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended('teachmi:gemini:quota',0))");
+        var rows = jdbc.queryForList("SELECT *, lease_until > now() AS leased, retry_after > now() AS cooling "
+                + "FROM teachmi.learning_ai_generation WHERE generation_key=?", key);
+        if (!rows.isEmpty()) {
+            var row = rows.getFirst();
+            String state = (String) row.get("state");
+            if (state.equals("succeeded")) return (String) row.get("content_json");
+            if (state.equals("uncertain") || (state.equals("running") && !(Boolean) row.get("leased"))) {
+                // Expired leases are deliberately never automatically reclaimed.
+                throw new LearningException(503, "AI_GENERATION_UNCERTAIN",
+                        "호출 결과 확인이 필요합니다. 자동 재호출을 중단했습니다.");
+            }
+            if (state.equals("running")) {
+                throw new LearningException(503, "AI_GENERATION_IN_PROGRESS", "콘텐츠 생성이 진행 중입니다.");
+            }
+            if ((Boolean) row.get("cooling")) {
+                throw new LearningException(429, "AI_RETRY_LATER", "잠시 후 같은 요청을 다시 시도하세요.");
+            }
+            if (((Number) row.get("attempts")).intValue() >= settings.maxAttempts()) {
+                throw new LearningException(429, "AI_ATTEMPT_LIMIT", "이 콘텐츠의 생성 시도 한도에 도달했습니다.");
+            }
+        }
+        var counts = jdbc.queryForMap("""
+                SELECT count(*) AS day_count,
+                       count(*) FILTER (WHERE member_id=?) AS member_count
+                FROM teachmi.learning_ai_call WHERE attempted_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                """, context.memberId());
+        // Include the previous day's last minute at UTC midnight.
+        long minute = jdbc.queryForObject(
+                "SELECT count(*) FROM teachmi.learning_ai_call WHERE attempted_at > now()-interval '1 minute'", Long.class);
+        if (minute >= settings.requestsPerMinute()
+                || ((Number) counts.get("day_count")).longValue() >= settings.requestsPerDay()
+                || ((Number) counts.get("member_count")).longValue() >= settings.memberRequestsPerDay()) {
+            throw new LearningException(429, "AI_USAGE_LIMIT", "학습 콘텐츠 요청 한도에 도달했습니다.");
+        }
+        jdbc.update("""
+                INSERT INTO teachmi.learning_ai_generation
+                    (generation_key,member_id,session_id,state,attempts,lease_until,retry_after,updated_at)
+                VALUES (?,?,?,'running',1,now()+interval '120 seconds',now(),now())
+                ON CONFLICT (generation_key) DO UPDATE SET state='running',
+                    attempts=teachmi.learning_ai_generation.attempts+1,
+                    lease_until=now()+interval '120 seconds',updated_at=now()
+                """, key, context.memberId(), context.sessionId());
+        jdbc.update("""
+                INSERT INTO teachmi.learning_ai_call
+                    (id,generation_key,member_id,attempted_at,input_bytes,max_output_tokens)
+                VALUES (?,?,?,now(),?,?)
+                """, UUID.randomUUID(), key, context.memberId(), inputBytes, settings.maxOutputTokens());
+        return null;
+    }
+
+    public void succeed(String key, String contentJson) {
+        transaction.executeWithoutResult(status -> jdbc.update(
+                "UPDATE teachmi.learning_ai_generation SET state='succeeded',content_json=?,updated_at=now() "
+                        + "WHERE generation_key=? AND state='running'", contentJson, key));
+    }
+
+    public void fail(String key, boolean uncertain, int retrySeconds, String reason) {
+        transaction.executeWithoutResult(status -> jdbc.update(
+                "UPDATE teachmi.learning_ai_generation SET state=?,retry_after=now()+make_interval(secs=>?),"
+                        + "last_error_code=?,updated_at=now() WHERE generation_key=? AND state='running'",
+                uncertain ? "uncertain" : "failed", retrySeconds, reason, key));
+    }
+
+    @Override public void close() { pool.close(); }
+}
