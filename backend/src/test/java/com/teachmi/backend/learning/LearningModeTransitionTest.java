@@ -74,7 +74,7 @@ class LearningModeTransitionTest {
     @BeforeEach
     void setup() throws Exception {
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
-        jdbc.execute("TRUNCATE teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_session_request, teachmi.learning_message, teachmi.learning_session");
+        jdbc.execute("TRUNCATE teachmi.learning_reteach, teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_session_request, teachmi.learning_message, teachmi.learning_session");
         source.unavailable = false;
         generator.fail = false;
         generator.unknownEvidence = false;

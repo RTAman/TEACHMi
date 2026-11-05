@@ -14,12 +14,14 @@ class LearningSessionController {
     private final LearningSessionService sessions;
     private final ObjectProvider<CurrentMember> members;
     private final LearningTurnService turns;
+    private final LearningReteachService reteach;
 
     LearningSessionController(LearningSessionService sessions, ObjectProvider<CurrentMember> members,
-                              LearningTurnService turns) {
+                              LearningTurnService turns, LearningReteachService reteach) {
         this.sessions = sessions;
         this.members = members;
         this.turns = turns;
+        this.reteach = reteach;
     }
 
     @PostMapping
@@ -40,6 +42,13 @@ class LearningSessionController {
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @Valid @RequestBody TurnRequest request) {
         return turns.send(requireMemberId(http), sessionId, key, request);
+    }
+
+    @PostMapping("/{sessionId}/reteach")
+    SessionView reteach(HttpServletRequest http, @PathVariable UUID sessionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @Valid @RequestBody StartReteachRequest request) {
+        return reteach.start(requireMemberId(http), sessionId, key, request);
     }
 
     @PutMapping("/{sessionId}/mode")

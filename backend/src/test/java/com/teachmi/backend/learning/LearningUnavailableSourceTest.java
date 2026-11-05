@@ -70,4 +70,22 @@ class LearningUnavailableSourceTest {
             sessions.deleteById(session.id);
         }
     }
+
+    @Test
+    void missingCProblemSourceCannotStartAFakeReteach() throws Exception {
+        var session = new LearningSession("missing-c", new CreateSessionRequest("m01","c01",null,null),
+                "{\"name\":\"개념\",\"scope\":\"범위\",\"sourceChunkIds\":[\"k01\"]}");
+        session.stage = "problem";
+        session = sessions.saveAndFlush(session);
+        try {
+            var result = MockMvcBuilders.webAppContextSetup(context).build()
+                    .perform(post("/api/v1/sessions/" + session.id + "/reteach").principal(() -> "missing-c")
+                            .header("Idempotency-Key","missing-c").contentType("application/json")
+                            .content("{\"problemId\":\"p01\",\"attemptId\":\"a01\",\"expectedVersion\":0}")).andReturn();
+            assertThat(result.getResponse().getStatus()).isEqualTo(503);
+            assertThat(result.getResponse().getContentAsString()).contains("LEARNING_PROBLEM_INTEGRATION_PENDING");
+            assertThat(sessions.findById(session.id).orElseThrow().stage).isEqualTo("problem");
+            assertThat(sessions.findById(session.id).orElseThrow().activeReteachId).isNull();
+        } finally { sessions.deleteById(session.id); }
+    }
 }

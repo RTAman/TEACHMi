@@ -20,6 +20,7 @@ class LearningMessage {
     @Column(nullable = false, columnDefinition = "text") String sourceChunkIds;
     @Column(nullable = false) Instant createdAt;
     @Column UUID supportEventId;
+    @Column UUID reteachId;
 
     protected LearningMessage() {}
 

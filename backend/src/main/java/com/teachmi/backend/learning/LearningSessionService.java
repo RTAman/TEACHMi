@@ -193,6 +193,11 @@ public class LearningSessionService {
             if (!reservations.isEmpty() && !requestJson.equals(reservations.getFirst().get("request_body"))) {
                 throw new LearningException(409, "IDEMPOTENCY_KEY_REUSED", "같은 키에 다른 요청을 보냈습니다.");
             }
+            var reteachKeys = jdbc.queryForList(
+                    "SELECT request_body FROM teachmi.learning_reteach WHERE member_id=? AND request_key=?", memberId, key);
+            if (!reteachKeys.isEmpty() && !requestJson.equals(reteachKeys.getFirst().get("request_body"))) {
+                throw new LearningException(409, "IDEMPOTENCY_KEY_REUSED", "같은 키에 다른 요청을 보냈습니다.");
+            }
             return Optional.empty();
         }
         var saved = rows.getFirst();
@@ -234,7 +239,24 @@ public class LearningSessionService {
                 SELECT * FROM teachmi.learning_support_event WHERE session_id=? ORDER BY created_at,id
                 """, (rs, row) -> new SupportEventView(rs.getObject("id", UUID.class), rs.getString("kind"),
                 rs.getObject("target_message_id", UUID.class), rs.getObject("request_message_id", UUID.class),
-                rs.getObject("response_message_id", UUID.class), rs.getTimestamp("created_at").toInstant()), session.id);
+                rs.getObject("response_message_id", UUID.class), rs.getTimestamp("created_at").toInstant(),
+                rs.getObject("reteach_id", UUID.class)), session.id);
+        var episodes = jdbc.query("""
+                SELECT *, lease_until > now() AS leased FROM teachmi.learning_reteach
+                WHERE session_id=? ORDER BY created_at,id
+                """, (rs, row) -> new ReteachView(rs.getObject("id", UUID.class), rs.getString("problem_id"),
+                rs.getString("attempt_id"), rs.getString("focus"),
+                rs.getString("state").equals("generating") && !rs.getBoolean("leased") ? "interrupted" : rs.getString("state"),
+                rs.getObject("question_message_id", UUID.class), rs.getObject("initial_answer_id", UUID.class),
+                rs.getObject("final_explanation_id", UUID.class), rs.getTimestamp("created_at").toInstant(),
+                rs.getTimestamp("completed_at") == null ? null : rs.getTimestamp("completed_at").toInstant(),
+                rs.getString("request_key"), rs.getLong("expected_version"), rs.getString("error_code")), session.id);
+        var active = episodes.stream().filter(item -> item.reteachId().equals(session.activeReteachId)).findFirst().orElse(null);
+        var returned = episodes.stream().filter(item -> item.reteachId().equals(session.returnReteachId)
+                && item.state().equals("returned")).findFirst().orElse(null);
+        ProblemReturn problemReturn = returned == null || !session.status.equals("active") ? null
+                : new ProblemReturn(returned.reteachId(), returned.problemId(), returned.attemptId(),
+                "/api/v1/sessions/" + session.id + "/problems/" + returned.problemId());
         return new SessionView(session.id, session.materialId, session.conceptId,
                 json.readValue(session.conceptSnapshot, ConceptSource.Snapshot.class),
                 session.mode, session.stage, session.status, session.version,
@@ -248,18 +270,22 @@ public class LearningSessionService {
                         .map(message -> new LearningMessageView(message.id, message.sequence, message.role,
                                 message.kind, message.chatStage, message.text,
                                 List.of(json.readValue(message.sourceChunkIds, String[].class)),
-                                message.createdAt, message.supportEventId)).toList(),
-                session.initialAnswerId, session.finalExplanationId, supports, pending, actions(session, pending));
+                                message.createdAt, message.supportEventId, message.reteachId)).toList(),
+                session.initialAnswerId, session.finalExplanationId, supports, pending,
+                actions(session, pending, active, problemReturn), active, problemReturn, episodes);
     }
 
-    private List<String> actions(LearningSession session, TurnProgress pending) {
+    private List<String> actions(LearningSession session, TurnProgress pending, ReteachView active, ProblemReturn returned) {
         if (!session.status.equals("active")) return List.of();
+        if (active != null && !active.state().equals("chat")) {
+            return active.state().equals("generating") ? List.of("wait") : List.of("retry_reteach");
+        }
         if (pending != null) return pending.state().equals("generating") ? List.of("wait") : List.of("retry_turn");
         return switch (session.stage) {
             case "mode" -> List.of("select_mode");
             case "summary" -> List.of("start_chat");
             case "chat" -> List.of("answer", "hint", "example", "dont_know");
-            case "problem" -> List.of("start_problems");
+            case "problem" -> returned == null ? List.of("start_problems") : List.of("retry_problem");
             case "report" -> List.of("view_report");
             default -> List.of();
         };

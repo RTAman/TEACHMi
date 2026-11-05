@@ -77,7 +77,7 @@ class LearningTurnsApiTest {
     String id;
 
     @BeforeEach void setup() throws Exception {
-        jdbc.execute("TRUNCATE teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_session_request, "
+        jdbc.execute("TRUNCATE teachmi.learning_reteach, teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_session_request, "
                 + "teachmi.learning_message, teachmi.learning_session");
         generator.calls.set(0);
         generator.sufficient = true;
