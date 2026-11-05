@@ -9,7 +9,7 @@ import org.springframework.web.context.WebApplicationContext;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(classes = LearningTestApplication.class)
 class LearningUnavailableSourceTest {
     @Autowired WebApplicationContext context;
 

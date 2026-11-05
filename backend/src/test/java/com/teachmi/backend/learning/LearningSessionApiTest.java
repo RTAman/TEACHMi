@@ -6,7 +6,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import com.teachmi.backend.TeachmiApplication;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -29,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
-@SpringBootTest
+@SpringBootTest(classes = LearningTestApplication.class)
 @Import(LearningSessionApiTest.Sources.class)
 class LearningSessionApiTest {
     @Autowired WebApplicationContext context;
@@ -103,7 +102,7 @@ class LearningSessionApiTest {
         assertThat(body(loaded).path("version").asLong()).isEqualTo(1);
         assertThat(body(loaded).path("concept").path("name").asText()).isEqualTo("감가상각");
         // A second application instance must restore the saved progress without the test source bean.
-        try (var restarted = new SpringApplicationBuilder(TeachmiApplication.class)
+        try (var restarted = new SpringApplicationBuilder(LearningTestApplication.class)
                 .web(WebApplicationType.NONE).run()) {
             var restored = restarted.getBean(LearningSessionService.class)
                     .get("member-1", UUID.fromString(id));
