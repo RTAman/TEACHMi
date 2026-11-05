@@ -49,6 +49,8 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 
 B의 세션 생성·조회 API, 새 시작 확인과 재시도 규칙, A가 구현할 인증·개념 연결 인터페이스는 [학습 세션 연동 계약](LEARNING_SESSIONS.md)에 정리했습니다.
 
+Gemini 환경 변수, A 원문 연결 대기 상태, 출처 검증과 실 API 테스트는 [Gemini 콘텐츠 생성 안내](GEMINI_CONTENT.md)를 확인하세요.
+
 ## DB 변경과 빌드
 
 서버 시작 시 Flyway가 `src/main/resources/db/migration/`의 SQL을 순서대로 적용합니다. V1은 업무 테이블을 담을 `teachmi` 스키마를 만듭니다. 새 테이블은 `teachmi.테이블명`으로 지정하고 `V2__create_users.sql` 같은 새 파일에 작성합니다. 다음 버전 번호와 병합 순서는 PR에서 C와 맞추고, 적용된 SQL은 새 버전으로 수정합니다. Hibernate는 엔티티와 실제 스키마가 일치하는지 검사합니다.

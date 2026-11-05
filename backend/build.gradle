@@ -31,5 +31,18 @@ dependencies {
 }
 
 tasks.named('test') {
-    useJUnitPlatform()
+    useJUnitPlatform {
+        excludeTags 'gemini-live'
+    }
+}
+
+tasks.register('geminiLiveTest', Test) {
+    description = 'Opt-in Gemini API smoke test using synthetic source text and a real PostgreSQL DB.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'gemini-live'
+    }
+    shouldRunAfter tasks.named('test')
 }

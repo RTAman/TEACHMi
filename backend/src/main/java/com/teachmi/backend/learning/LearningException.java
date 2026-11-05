@@ -19,4 +19,8 @@ public class LearningException extends RuntimeException {
     public static LearningException notFound() {
         return new LearningException(404, "NOT_FOUND", "학습 자료 또는 세션을 찾을 수 없습니다.");
     }
+
+    public String code() {
+        return code;
+    }
 }
