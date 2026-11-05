@@ -33,6 +33,8 @@ docker compose up -d --wait db
 
 Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨은 초기 계정 정보를 유지합니다. 원격 PostgreSQL에 연결할 때는 환경 변수 `DB_URL`에 전체 JDBC URL, `DB_USER`와 `DB_PASSWORD`에 해당 계정 정보를 지정합니다. 실제 비밀번호·AI 키는 개인 환경에만 저장하세요.
 
+**이미 실행 중인 PostgreSQL 17을 쓰는 경우**에는 서버 관리자 계정으로 `createuser --pwprompt teachmi`와 `createdb --owner=teachmi teachmi`를 실행해 개발 전용 계정과 DB를 만듭니다. 이미 준비된 계정과 DB가 있으면 그대로 사용하세요. `backend/.env`에 해당 값과 실제 포트(일반적인 로컬 설치는 `DB_PORT=5432`)를 입력한 뒤 위 절차에서 Compose 단계를 건너뛰고 `bootRun`을 실행합니다.
+
 ## 담당 기능과 첫 작업
 
 [공통 작업 계획서](../TEACHMi%20백엔드%20작업%20계획서.docx)에서 전체 API 계약과 일정을 확인할 수 있습니다. 각자 아래 패키지에 첫 기능을 추가합니다. 기본 프로젝트가 제공하는 HTTP 경로는 서버 상태 조회이며, 업무 API는 `/api/v1` 아래에 구현합니다.
