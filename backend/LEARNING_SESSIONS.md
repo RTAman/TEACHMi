@@ -112,6 +112,8 @@ POST의 `Idempotency-Key`는 회원별로 구분하며 1~128자입니다. 한 �
 
 ## C와 DB 변경
 
+C가 평가·리포트 저장 후 report 단계와 completed 상태로 전환하는 내부 서비스는 [평가·리포트 상태 전환 계약](ASSESSMENT_TRANSITIONS.md)을 확인하세요.
+
 대화의 최초·최종 설명 ID, 도움 이벤트, 재시도 중인 전송 상태는 [대화 API 계약](CONVERSATION_TURNS.md)을 확인하세요.
 
 C는 아래 진행 중 학습 조회로 세션 ID를 찾고 홈 응답에 연결할 수 있습니다. 프론트엔드는 반환된 상태를 사용하거나 해당 ID로 기존 GET을 호출해 재개합니다. 서버 내부에서는 `LearningSessionService.get(memberId, sessionId)`로 같은 소유권 검사를 적용할 수 있습니다.
