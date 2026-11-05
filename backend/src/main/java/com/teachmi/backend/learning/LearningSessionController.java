@@ -35,6 +35,13 @@ class LearningSessionController {
         return ResponseEntity.created(URI.create("/api/v1/sessions/" + result.sessionId())).body(result);
     }
 
+    @GetMapping("/active")
+    ResponseEntity<SessionView> active(HttpServletRequest http) {
+        return sessions.getActive(requireMemberId(http))
+                .map(session -> ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(session))
+                .orElseGet(() -> ResponseEntity.noContent().cacheControl(CacheControl.noStore()).build());
+    }
+
     @GetMapping("/{sessionId}")
     SessionView get(HttpServletRequest http, @PathVariable UUID sessionId) {
         return sessions.get(requireMemberId(http), sessionId);

@@ -49,6 +49,8 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 
 B의 세션 생성·조회 API, 새 시작 확인과 재시도 규칙, A가 구현할 인증·개념 연결 인터페이스는 [학습 세션 연동 계약](LEARNING_SESSIONS.md)에 정리했습니다.
 
+로그인 후 세션 ID 없이 이어하기 대상을 찾으려면 `GET /api/v1/sessions/active`를 사용합니다. 진행 중 학습은 기존 SessionView, 대상이 없으면 204를 반환합니다. C의 홈도 `LearningSessionService.getActive`를 재사용할 수 있습니다.
+
 Gemini 환경 변수, A 원문 연결 대기 상태, 출처 검증과 실 API 테스트는 [Gemini 콘텐츠 생성 안내](GEMINI_CONTENT.md)를 확인하세요.
 
 사용자 설명과 도움 전송, 단계 전환, 실패한 전송의 재접속·재시도, C에 전달할 메시지 근거는 [대화 API 계약](CONVERSATION_TURNS.md)에 정리했습니다.

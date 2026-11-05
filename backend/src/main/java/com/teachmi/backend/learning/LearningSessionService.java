@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -216,6 +217,12 @@ public class LearningSessionService {
     }
 
     private record TransitionRequest(String operation, UUID sessionId, String mode, long expectedVersion) {}
+
+    /** Committed resume snapshot for HTTP and C's home, including callers in an outer transaction. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ, propagation = Propagation.REQUIRES_NEW)
+    public Optional<SessionView> getActive(String memberId) {
+        return sessions.findActiveByMemberId(memberId).map(this::view);
+    }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public SessionView get(String memberId, UUID sessionId) {
