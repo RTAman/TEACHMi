@@ -8,6 +8,8 @@
 | --- | --- | --- |
 | `POST /api/v1/sessions` | 로그인 정보, `Idempotency-Key`, 아래 JSON | `201`, 생성한 학습과 `Location` 헤더 |
 | `GET /api/v1/sessions/{sessionId}` | 로그인 정보 | `200`, 저장된 개념 사본·단계·버전·재개 위치 |
+| `PUT /api/v1/sessions/{sessionId}/mode` | 로그인 정보, `Idempotency-Key`, `mode`, `expectedVersion` | `200`, 요약 또는 첫 사례 질문과 갱신된 학습 |
+| `POST /api/v1/sessions/{sessionId}/chat/start` | 로그인 정보, `Idempotency-Key`, `expectedVersion` | `200`, 처음 학습의 설명 시작과 저장된 첫 질문 |
 
 ```json
 {
@@ -27,7 +29,45 @@
 }
 ```
 
-위 객체는 응답의 `resume` 값입니다. `path`는 복원 상태를 조회하는 API 주소이고 프론트엔드는 `stage`로 화면을 선택합니다. 종료된 학습은 읽을 수 있으며 `resume`은 `null`입니다. 모드 선택·요약·AI 대화 저장은 B의 후속 작업에서 이 상태를 갱신합니다.
+위 객체는 응답의 `resume` 값입니다. `path`는 복원 상태를 조회하는 API 주소이고 프론트엔드는 `stage`로 화면을 선택합니다. 종료된 학습은 읽을 수 있으며 `resume`은 `null`입니다.
+
+## 모드 선택과 설명 시작
+
+세션 생성 직후 받은 `version`을 다음 요청의 `expectedVersion`으로 전달합니다. 각 변경에는 새 키를 만들고 같은 변경을 재전송할 때 해당 키를 유지합니다.
+
+```http
+PUT /api/v1/sessions/{sessionId}/mode
+Idempotency-Key: choose-mode-1
+Content-Type: application/json
+
+{"mode":"first","expectedVersion":0}
+```
+
+`first`는 근거 있는 요약 `summary.text`, 예시 `examples`, 핵심 용어 `keyTerms`, 생각할 점 `reflectionPrompt`, 출처 `sourceChunkIds`를 저장하고 `stage: "summary"`, `version: 1`을 반환합니다. 사용자가 요약을 읽고 설명 시작을 누르면 다음을 보냅니다.
+
+```http
+POST /api/v1/sessions/{sessionId}/chat/start
+Idempotency-Key: start-chat-1
+Content-Type: application/json
+
+{"expectedVersion":1}
+```
+
+첫 사례 질문을 저장한 후 `stage: "chat"`, `chatStage: "case"`, `version: 2`가 됩니다. `messages`에는 질문의 `messageId`, `sequence: 1`, `role: "assistant"`, `kind: "case_question"`, `text`, 출처, 작성 시각이 있습니다.
+
+`mode: "review"`를 고르면 요약 단계를 건너뛰어 같은 형태의 첫 질문과 `stage: "chat"`, `chatStage: "case"`, `version: 1`을 바로 반환합니다. `summary`는 `null`입니다. 세션 GET도 요약과 메시지를 함께 반환하므로 앱을 다시 열 때 저장된 질문을 표시할 수 있습니다.
+
+선택 후 모드를 바꾸거나 요약 전에 설명 시작을 호출하면 409입니다. 종료된 학습도 전환할 수 없습니다. 새 키와 오래된 버전으로 보내면 최신 상태를 포함한 `409 SESSION_STATE_CONFLICT`가 나옵니다. 최초와 같은 키·경로·본문은 저장된 성공 응답을 재사용합니다. 이미 설명을 시작한 처음 학습을 현재 버전과 새 키로 다시 열어도 기존 질문·버전을 돌려줍니다.
+
+생성 요청과 단계 전환 요청은 회원별 키 공간을 공유합니다. 같은 키를 다른 세션·다른 API에 재사용하면 409이므로 각각의 변경에 새 키를 사용하세요. GET으로 현재 상태를 확인한 뒤 충돌을 해소합니다.
+
+## B의 콘텐츠 생성 연결
+
+`LearningContentGenerator` Spring bean을 실제 AI 호출 어댑터로 연결합니다. `summarize(Context)`는 처음 학습 자료를, `openingQuestion(Context)`는 AI 학생의 첫 사례 질문을 반환합니다. Context에는 회원·학습·자료·개념 ID, 선택한 모드, 개념 사본, 저장된 요약이 담겨 있습니다. 어댑터는 A의 소유권 검사된 원문 조회를 사용해 실제 텍스트를 얻고, 외부 모델 호출에는 제한 시간과 오류 처리를 설정합니다.
+
+요약의 각 텍스트와 예시·용어 목록을 검증하고, 요약·질문의 출처 목록이 비어 있거나 선택 개념의 출처 밖이면 502를 반환합니다. 생성과 저장이 성공한 경우에만 세션 단계·버전과 메시지·재시도 응답을 함께 커밋합니다. 실패 시 같은 키로 다시 요청할 수 있습니다.
+
+생성기 미연결은 `503 LEARNING_CONTENT_UNAVAILABLE`, 생성 호출 오류는 `502 LEARNING_CONTENT_FAILED`, 잘못된 출처는 `502 INVALID_LEARNING_CONTENT`입니다. 모두 기존 단계와 버전을 유지합니다. 테스트는 생성기를 대체하며 실제 모델의 질문 품질은 어댑터 연결 후 검수합니다. 이후 사용자 답변·도움 요청 처리는 `/turns` 작업에서 추가합니다.
 
 ## 충돌과 재시도
 
@@ -54,6 +94,7 @@ POST의 `Idempotency-Key`는 회원별로 구분하며 1~128자입니다. 한 �
 | 422 | 빈 ID, 잘못된 교체 조건, 누락되거나 너무 긴 재시도 키 |
 | 400 | 잘못된 JSON 또는 UUID 형식 |
 | 503 | A의 자료 조회 연결이 준비되지 않음 |
+| 502 | 콘텐츠 생성 실패 또는 잘못된 생성 결과 |
 
 ## A가 연결할 인터페이스
 
@@ -73,6 +114,10 @@ C는 홈에서 회원의 진행 중 세션 ID를 전달하고, 프론트엔드�
 
 `V2__create_learning_sessions.sql`에 B의 세션과 생성 요청 재시도 테이블을 정의했습니다. 회원·자료·개념 FK는 A의 ID 타입과 테이블명이 확정되면 별도 마이그레이션에서 연결합니다. PR 병합 전 A·C의 마이그레이션과 V2 번호 충돌을 확인하세요.
 
+`V3__add_learning_preparation_and_messages.sql`은 요약·대화 단계와 메시지 테이블을 추가합니다. V2의 기존 학습은 새 필드가 비어 있는 상태로 유지되고, 이전 버전에서 저장한 생성 응답도 재전송할 수 있습니다. 후속 메시지는 세션별 순번을 이어 사용하세요. V3 번호도 A·C의 변경과 함께 확인합니다.
+
 ## 확인 방법
 
 DB를 켠 뒤 `backend/`에서 Windows는 `.\gradlew.bat build`, macOS·Linux는 `./gradlew build`를 실행합니다. 테스트에서 A의 개념 조회를 대체하고 실제 PostgreSQL로 생성·회원 격리·동시 요청·명시적 교체·실패 복구를 검사합니다. 새 애플리케이션 인스턴스가 기존 DB의 단계와 개념 사본을 읽는지도 확인합니다.
+
+모드 전환 테스트는 처음·복습 분기, 요약과 첫 질문의 앱 재기동 복원, 동시 선택·설명 시작, 키 재사용, 오래된 버전, 생성 실패 후 재시도, 출처 검증, 생성기 미연결을 포함합니다.
