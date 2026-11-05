@@ -13,10 +13,13 @@ import org.springframework.web.bind.annotation.*;
 class LearningSessionController {
     private final LearningSessionService sessions;
     private final ObjectProvider<CurrentMember> members;
+    private final LearningTurnService turns;
 
-    LearningSessionController(LearningSessionService sessions, ObjectProvider<CurrentMember> members) {
+    LearningSessionController(LearningSessionService sessions, ObjectProvider<CurrentMember> members,
+                              LearningTurnService turns) {
         this.sessions = sessions;
         this.members = members;
+        this.turns = turns;
     }
 
     @PostMapping
@@ -30,6 +33,13 @@ class LearningSessionController {
     @GetMapping("/{sessionId}")
     SessionView get(HttpServletRequest http, @PathVariable UUID sessionId) {
         return sessions.get(requireMemberId(http), sessionId);
+    }
+
+    @PostMapping("/{sessionId}/turns")
+    SessionView turn(HttpServletRequest http, @PathVariable UUID sessionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @Valid @RequestBody TurnRequest request) {
+        return turns.send(requireMemberId(http), sessionId, key, request);
     }
 
     @PutMapping("/{sessionId}/mode")

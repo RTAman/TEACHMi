@@ -19,18 +19,25 @@ class LearningMessage {
     @Column(nullable = false, columnDefinition = "text") String text;
     @Column(nullable = false, columnDefinition = "text") String sourceChunkIds;
     @Column(nullable = false) Instant createdAt;
+    @Column UUID supportEventId;
 
     protected LearningMessage() {}
 
     LearningMessage(UUID sessionId, String text, String sourceChunkIds) {
+        this(sessionId, 1, "assistant", "case_question", "case", text, sourceChunkIds, null);
+    }
+
+    LearningMessage(UUID sessionId, long sequence, String role, String kind, String chatStage,
+                    String text, String sourceChunkIds, UUID supportEventId) {
         this.id = UUID.randomUUID();
         this.sessionId = sessionId;
-        this.sequence = 1;
-        this.role = "assistant";
-        this.kind = "case_question";
-        this.chatStage = "case";
+        this.sequence = sequence;
+        this.role = role;
+        this.kind = kind;
+        this.chatStage = chatStage;
         this.text = text;
         this.sourceChunkIds = sourceChunkIds;
         this.createdAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        this.supportEventId = supportEventId;
     }
 }

@@ -61,7 +61,7 @@ class GeminiContentIntegrationTest {
 
     @BeforeEach
     void setup() throws Exception {
-        jdbc.execute("TRUNCATE teachmi.learning_ai_call, teachmi.learning_ai_generation, "
+        jdbc.execute("TRUNCATE teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_ai_call, teachmi.learning_ai_generation, "
                 + "teachmi.learning_session_request, teachmi.learning_message, teachmi.learning_session");
         sources.override = null;
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
@@ -69,6 +69,10 @@ class GeminiContentIntegrationTest {
             var request = json.readTree(call.getArgument(0, String.class));
             var data = json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
             assertThat(data.path("lectureExcerpts").get(0).path("text").asText()).isEqualTo(GeminiFixtures.SOURCE);
+            if (data.path("operation").asText().equals("dialogue")) {
+                assertThat(data.path("dialogue").path("targetQuestion").path("messageId").isString()).isTrue();
+                return GeminiFixtures.dialogueResponse(json, data.path("dialogue").path("kind").asText().equals("answer"));
+            }
             return GeminiFixtures.response(json, data.path("operation").asText().equals("summary"));
         }).when(transport).generate(anyString());
         var created = mvc.perform(post("/api/v1/sessions").principal(() -> "u1")
@@ -104,6 +108,61 @@ class GeminiContentIntegrationTest {
         assertThat(result.path("messages").size()).isEqualTo(1);
         assertThat(mode("review", "review")).isEqualTo(result);
         verify(transport).generate(anyString());
+    }
+
+    @Test
+    void geminiReplyUsesSavedUserInputAndAdvancesTheServerStage() throws Exception {
+        mode("review", "review");
+        var reply = turn("answer", "answer", "600만 원을 3년에 걸쳐 매년 200만 원씩 배분합니다.");
+        assertThat(reply.getResponse().getStatus()).isEqualTo(200);
+        var state = json.readTree(reply.getResponse().getContentAsByteArray());
+        assertThat(state.path("chatStage").asText()).isEqualTo("concept");
+        assertThat(state.path("initialAnswerId")).isEqualTo(state.path("messages").get(1).path("messageId"));
+        verify(transport, times(2)).generate(anyString());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"hint", "example", "dont_know"})
+    void geminiHelpStaysOnTheStageAndIsRestorable(String kind) throws Exception {
+        mode("review", "review");
+        var reply = turn(kind, kind, null);
+        assertThat(reply.getResponse().getStatus()).isEqualTo(200);
+        var state = json.readTree(reply.getResponse().getContentAsByteArray());
+        assertThat(state.path("chatStage").asText()).isEqualTo("case");
+        assertThat(state.path("supportEvents").size()).isEqualTo(1);
+        assertThat(state.path("messages").size()).isEqualTo(3);
+        assertThat(json.readTree(turn(kind, kind, null).getResponse().getContentAsByteArray())).isEqualTo(state);
+        verify(transport, times(2)).generate(anyString());
+    }
+
+    @Test
+    void geminiCannotAdvanceAStageThroughHelpAndTheInvalidResultIsNotCachedAsSuccess() throws Exception {
+        mode("review", "review");
+        doReturn(GeminiFixtures.dialogueResponse(json, true)).when(transport).generate(anyString());
+        assertThat(turn("help", "hint", null).getResponse().getStatus()).isEqualTo(502);
+        doReturn(GeminiFixtures.dialogueResponse(json, false)).when(transport).generate(anyString());
+        assertThat(turn("help", "hint", null).getResponse().getStatus()).isEqualTo(200);
+        assertThat(sessions.get("u1", UUID.fromString(id)).chatStage()).isEqualTo("case");
+        verify(transport, times(3)).generate(anyString());
+    }
+
+    @Test
+    void uncertainGeminiReplyPreservesTheAnswerAndDoesNotGenerateAgainOnRetry() throws Exception {
+        mode("review", "review");
+        doThrow(new GeminiCallFailure(true, 503, "AI_GENERATION_UNCERTAIN", 0))
+                .when(transport).generate(anyString());
+        assertThat(turn("answer", "answer", "저장할 답변").getResponse().getStatus()).isEqualTo(503);
+        var pending = sessions.get("u1", UUID.fromString(id));
+        assertThat(pending.messages()).hasSize(2);
+        assertThat(pending.pendingTurn().state()).isEqualTo("failed");
+        assertThat(turn("answer", "answer", "저장할 답변").getResponse().getStatus()).isEqualTo(503);
+        verify(transport, times(2)).generate(anyString());
+    }
+
+    private org.springframework.test.web.servlet.MvcResult turn(String key, String kind, String text) throws Exception {
+        return mvc.perform(post("/api/v1/sessions/" + id + "/turns").principal(() -> "u1")
+                .header("Idempotency-Key", key).contentType("application/json")
+                .content(json.writeValueAsString(new TurnRequest(kind, text, 1L)))).andReturn();
     }
 
     @Test

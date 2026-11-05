@@ -8,6 +8,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
@@ -132,7 +133,7 @@ public class LearningSessionService {
                 json.writeValueAsString(question.sourceChunkIds())));
     }
 
-    private LearningContentGenerator.Context contentContext(LearningSession session, String mode) {
+    LearningContentGenerator.Context contentContext(LearningSession session, String mode) {
         return new LearningContentGenerator.Context(session.memberId, session.id, session.materialId,
                 session.conceptId, mode, json.readValue(session.conceptSnapshot, ConceptSource.Snapshot.class),
                 session.summaryJson == null ? null
@@ -157,35 +158,41 @@ public class LearningSessionService {
         }
     }
 
-    private void verifyEvidence(List<String> sourceIds, ConceptSource.Snapshot concept) {
+    void verifyEvidence(List<String> sourceIds, ConceptSource.Snapshot concept) {
         if (sourceIds.isEmpty() || !concept.sourceChunkIds().containsAll(sourceIds)) {
             throw new LearningException(502, "INVALID_LEARNING_CONTENT", "선택 개념의 출처를 확인할 수 없습니다.");
         }
     }
 
-    private LearningException conflict(LearningSession session) {
+    LearningException conflict(LearningSession session) {
         return new LearningException(409, "SESSION_STATE_CONFLICT", "학습 단계 또는 버전이 변경됐습니다.", view(session));
     }
 
-    private void validateKey(String key) {
-        if (key == null || key.isBlank() || key.length() > 128) {
+    void validateKey(String key) {
+        if (key == null || key.isBlank() || key.length() > 128 || key.indexOf('\0') >= 0) {
             throw new LearningException(422, "INVALID_IDEMPOTENCY_KEY",
                     "Idempotency-Key는 1~128자로 전달해야 합니다.");
         }
     }
 
-    private void lockMember(String memberId) {
+    void lockMember(String memberId) {
         // This lock also serializes first starts when there is no existing session row.
         jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
                 "teachmi:learning:" + memberId);
     }
 
-    private Optional<SessionView> replay(String memberId, String key, String requestJson) {
+    Optional<SessionView> replay(String memberId, String key, String requestJson) {
         var rows = jdbc.queryForList("""
                 SELECT request_body, response_body FROM teachmi.learning_session_request
                 WHERE member_id = ? AND request_key = ?
                 """, memberId, key);
         if (rows.isEmpty()) {
+            var reservations = jdbc.queryForList(
+                    "SELECT request_body FROM teachmi.learning_turn WHERE member_id=? AND request_key=?",
+                    memberId, key);
+            if (!reservations.isEmpty() && !requestJson.equals(reservations.getFirst().get("request_body"))) {
+                throw new LearningException(409, "IDEMPOTENCY_KEY_REUSED", "같은 키에 다른 요청을 보냈습니다.");
+            }
             return Optional.empty();
         }
         var saved = rows.getFirst();
@@ -195,7 +202,7 @@ public class LearningSessionService {
         return Optional.of(json.readValue((String) saved.get("response_body"), SessionView.class));
     }
 
-    private void remember(String memberId, String key, String requestJson, SessionView result) {
+    void remember(String memberId, String key, String requestJson, SessionView result) {
         jdbc.update("""
                 INSERT INTO teachmi.learning_session_request(member_id, request_key, session_id,
                                                              request_body, response_body)
@@ -205,13 +212,29 @@ public class LearningSessionService {
 
     private record TransitionRequest(String operation, UUID sessionId, String mode, long expectedVersion) {}
 
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public SessionView get(String memberId, UUID sessionId) {
         return view(sessions.findByIdAndMemberId(sessionId, memberId)
                 .orElseThrow(LearningException::notFound));
     }
 
-    private SessionView view(LearningSession session) {
+    SessionView view(LearningSession session) {
+        TurnProgress pending = null;
+        if (session.pendingTurnId != null) {
+            var rows = jdbc.query("""
+                    SELECT *, lease_until > now() AS leased FROM teachmi.learning_turn WHERE id=?
+                    """, (rs, row) -> new TurnProgress(rs.getObject("id", UUID.class), rs.getString("kind"),
+                    rs.getString("state").equals("generating") && !rs.getBoolean("leased")
+                            ? "interrupted" : rs.getString("state"),
+                    rs.getObject("user_message_id", UUID.class), rs.getString("error_code"),
+                    rs.getString("request_key"), rs.getLong("expected_version")), session.pendingTurnId);
+            if (!rows.isEmpty()) pending = rows.getFirst();
+        }
+        var supports = jdbc.query("""
+                SELECT * FROM teachmi.learning_support_event WHERE session_id=? ORDER BY created_at,id
+                """, (rs, row) -> new SupportEventView(rs.getObject("id", UUID.class), rs.getString("kind"),
+                rs.getObject("target_message_id", UUID.class), rs.getObject("request_message_id", UUID.class),
+                rs.getObject("response_message_id", UUID.class), rs.getTimestamp("created_at").toInstant()), session.id);
         return new SessionView(session.id, session.materialId, session.conceptId,
                 json.readValue(session.conceptSnapshot, ConceptSource.Snapshot.class),
                 session.mode, session.stage, session.status, session.version,
@@ -225,6 +248,20 @@ public class LearningSessionService {
                         .map(message -> new LearningMessageView(message.id, message.sequence, message.role,
                                 message.kind, message.chatStage, message.text,
                                 List.of(json.readValue(message.sourceChunkIds, String[].class)),
-                                message.createdAt)).toList());
+                                message.createdAt, message.supportEventId)).toList(),
+                session.initialAnswerId, session.finalExplanationId, supports, pending, actions(session, pending));
+    }
+
+    private List<String> actions(LearningSession session, TurnProgress pending) {
+        if (!session.status.equals("active")) return List.of();
+        if (pending != null) return pending.state().equals("generating") ? List.of("wait") : List.of("retry_turn");
+        return switch (session.stage) {
+            case "mode" -> List.of("select_mode");
+            case "summary" -> List.of("start_chat");
+            case "chat" -> List.of("answer", "hint", "example", "dont_know");
+            case "problem" -> List.of("start_problems");
+            case "report" -> List.of("view_report");
+            default -> List.of();
+        };
     }
 }

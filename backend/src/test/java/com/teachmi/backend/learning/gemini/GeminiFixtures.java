@@ -39,6 +39,13 @@ final class GeminiFixtures {
                 "content", Map.of("parts", List.of(Map.of("text", text)))))));
     }
 
+    static String dialogueResponse(ObjectMapper json, boolean accepted) {
+        return envelope(json, json.writeValueAsString(Map.of(
+                "text", "감가상각이 무엇인지 조건과 함께 설명해 줄래?",
+                "accepted", accepted, "sourceChunkIds", List.of("k01"),
+                "evidence", List.of(Map.of("sourceChunkId", "k01", "quote", QUOTE)))), "STOP");
+    }
+
     static class Sources implements ConceptSource, LearningSourceReader {
         volatile OwnedSource override;
 

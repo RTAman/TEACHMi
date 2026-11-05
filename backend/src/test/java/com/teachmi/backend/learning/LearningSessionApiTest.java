@@ -65,7 +65,7 @@ class LearningSessionApiTest {
     @BeforeEach
     void setup() {
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
-        jdbc.execute("TRUNCATE teachmi.learning_session_request, teachmi.learning_message, teachmi.learning_session");
+        jdbc.execute("TRUNCATE teachmi.learning_turn, teachmi.learning_support_event, teachmi.learning_session_request, teachmi.learning_message, teachmi.learning_session");
         source.unavailable = false;
     }
 

@@ -70,6 +70,8 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 
 ## 테스트
 
+대화 API는 같은 Gemini 어댑터의 `LearningDialogueGenerator` 구현을 사용합니다. 현재 질문·대화 문맥·실제 원문으로 응답을 생성하고, 도움에 대한 accepted=true 판정은 거절합니다. 전송 저장과 단계 전환 계약은 [대화 API](CONVERSATION_TURNS.md)에 정리했습니다.
+
 `./gradlew build` 또는 Windows `.\gradlew.bat build`는 실 Google 호출을 제외합니다. 기존 B 테스트에 더해 로컬 HTTP 서버·대체 응답·실제 PostgreSQL로 출처, 오류, 한도, 롤백 후 재사용, 동시 요청, 작은 연결 풀의 교착 방지를 확인합니다.
 
 전용 PostgreSQL 테스트 DB와 키·모델 환경 변수를 준비한 뒤 실 API 테스트를 별도로 실행합니다. 새 터미널에서 환경 변수를 적용하세요. 기본 build와 GitHub CI에는 실 호출이 포함되지 않습니다.
@@ -77,14 +79,16 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 ```powershell
 cd backend
 $env:GEMINI_LIVE_TEST = "true"
-.\gradlew.bat geminiLiveTest
+.\gradlew.bat geminiLiveTest --tests com.teachmi.backend.learning.gemini.GeminiLiveTest
 ```
 
 ```sh
 cd backend
-GEMINI_LIVE_TEST=true ./gradlew geminiLiveTest
+GEMINI_LIVE_TEST=true ./gradlew geminiLiveTest --tests com.teachmi.backend.learning.gemini.GeminiLiveTest
 ```
 
 테스트는 합성 회계 원문을 사용하며 사용자 문서를 보내지 않습니다. 정상 경로에서 처음 학습 요약과 복습 첫 질문으로 2건을 실제 생성하고 저장·조회·재전송을 확인합니다. 테스트 학습은 정리하고 호출 기록은 비용 확인용으로 해당 테스트 DB에 남깁니다. 이 테스트의 A 연결은 테스트 전용 구현입니다.
+
+대화 실 테스트는 [별도 명령](CONVERSATION_TURNS.md)의 GeminiTurnsLiveTest를 선택하면 정상 경로에서 3건을 호출합니다. 테스트 클래스를 선택하지 않고 geminiLiveTest 전체를 실행하면 두 실 테스트에서 정상 경로 총 5건을 호출합니다.
 
 2026-11-05 실 연동 검증에서는 설정된 gemini-3.5-flash-lite의 생성 요청이 HTTP 503을 반환했습니다. 사용자의 허용을 받아 테스트 프로세스에서 gemini-3.1-flash-lite로 검증했고, 실제 생성 2건과 저장·복원이 통과했습니다. 운영 환경에서는 계정에서 생성 가능한 모델을 직접 선택하세요.
