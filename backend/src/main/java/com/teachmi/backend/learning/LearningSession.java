@@ -29,6 +29,8 @@ class LearningSession {
     String status;
     @Column(columnDefinition = "text")
     String summaryJson;
+    @Column(columnDefinition = "text")
+    String assessmentReportSnapshot;
     @Column(length = 16)
     String chatStage;
     @Column UUID pendingTurnId;
