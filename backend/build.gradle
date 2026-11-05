@@ -37,7 +37,7 @@ tasks.named('test') {
 }
 
 tasks.register('geminiLiveTest', Test) {
-    description = 'Opt-in Gemini API smoke test using synthetic source text and a real PostgreSQL DB.'
+    description = 'Opt-in Gemini smoke tests with synthetic sources; select a test class to bound API calls.'
     group = 'verification'
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath

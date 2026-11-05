@@ -31,6 +31,9 @@ class LearningSession {
     String summaryJson;
     @Column(length = 16)
     String chatStage;
+    @Column UUID pendingTurnId;
+    @Column UUID initialAnswerId;
+    @Column UUID finalExplanationId;
     @Version
     long version;
     @Column(nullable = false)
@@ -55,6 +58,7 @@ class LearningSession {
 
     void abandon() {
         status = "abandoned";
+        pendingTurnId = null;
         updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 
@@ -69,6 +73,23 @@ class LearningSession {
     void startChat() {
         stage = "chat";
         chatStage = "case";
+        updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+    }
+
+    void acceptAnswer(UUID messageId) {
+        switch (chatStage) {
+            case "case" -> chatStage = "concept";
+            case "concept" -> chatStage = "reason";
+            case "reason" -> chatStage = "wrapup";
+            case "wrapup" -> {
+                stage = "problem";
+                finalExplanationId = messageId;
+            }
+            default -> throw new IllegalStateException("Invalid conversation stage");
+        }
+    }
+
+    void touch() {
         updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 }

@@ -112,6 +112,8 @@ POST의 `Idempotency-Key`는 회원별로 구분하며 1~128자입니다. 한 �
 
 ## C와 DB 변경
 
+대화의 최초·최종 설명 ID, 도움 이벤트, 재시도 중인 전송 상태는 [대화 API 계약](CONVERSATION_TURNS.md)을 확인하세요.
+
 C는 홈에서 회원의 진행 중 세션 ID를 전달하고, 프론트엔드는 그 ID로 GET을 호출해 재개합니다. 서버 내부에서는 `LearningSessionService.get(memberId, sessionId)`로 같은 소유권 검사를 적용할 수 있습니다.
 
 `V2__create_learning_sessions.sql`에 B의 세션과 생성 요청 재시도 테이블을 정의했습니다. 회원·자료·개념 FK는 A의 ID 타입과 테이블명이 확정되면 별도 마이그레이션에서 연결합니다. PR 병합 전 A·C의 마이그레이션과 V2 번호 충돌을 확인하세요.
