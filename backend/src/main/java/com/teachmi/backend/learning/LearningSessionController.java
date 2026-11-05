@@ -32,6 +32,20 @@ class LearningSessionController {
         return sessions.get(requireMemberId(http), sessionId);
     }
 
+    @PutMapping("/{sessionId}/mode")
+    SessionView chooseMode(HttpServletRequest http, @PathVariable UUID sessionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @Valid @RequestBody ChooseModeRequest request) {
+        return sessions.chooseMode(requireMemberId(http), sessionId, key, request);
+    }
+
+    @PostMapping("/{sessionId}/chat/start")
+    SessionView startChat(HttpServletRequest http, @PathVariable UUID sessionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @Valid @RequestBody StartChatRequest request) {
+        return sessions.startChat(requireMemberId(http), sessionId, key, request);
+    }
+
     private String requireMemberId(HttpServletRequest request) {
         var adapter = members.getIfAvailable();
         var principal = request.getUserPrincipal();

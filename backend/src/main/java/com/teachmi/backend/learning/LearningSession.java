@@ -27,6 +27,10 @@ class LearningSession {
     String stage;
     @Column(nullable = false, length = 16)
     String status;
+    @Column(columnDefinition = "text")
+    String summaryJson;
+    @Column(length = 16)
+    String chatStage;
     @Version
     long version;
     @Column(nullable = false)
@@ -51,6 +55,20 @@ class LearningSession {
 
     void abandon() {
         status = "abandoned";
+        updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+    }
+
+    void selectMode(String mode, String summaryJson) {
+        this.mode = mode;
+        this.summaryJson = summaryJson;
+        stage = mode.equals("first") ? "summary" : "chat";
+        chatStage = mode.equals("review") ? "case" : null;
+        updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+    }
+
+    void startChat() {
+        stage = "chat";
+        chatStage = "case";
         updatedAt = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     }
 }
