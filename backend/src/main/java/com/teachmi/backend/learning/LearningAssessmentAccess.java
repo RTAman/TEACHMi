@@ -1,6 +1,8 @@
 package com.teachmi.backend.learning;
 
 import java.util.UUID;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,10 +14,12 @@ public class LearningAssessmentAccess {
     private final LearningSessionService access;
     private final LearningSessionRepository sessions;
     private final LearningMessageRepository messages;
+    private final EntityManager entities;
 
     LearningAssessmentAccess(LearningSessionService access, LearningSessionRepository sessions,
-                             LearningMessageRepository messages) {
+                             LearningMessageRepository messages, EntityManager entities) {
         this.access = access; this.sessions = sessions; this.messages = messages;
+        this.entities = entities;
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -25,6 +29,8 @@ public class LearningAssessmentAccess {
         }
         access.lockMember(member);
         var session = sessions.lockOwned(id, member).orElseThrow(LearningException::notFound);
+        // C may have read this entity before waiting on the member lock; reload committed state.
+        entities.refresh(session, LockModeType.PESSIMISTIC_WRITE);
         if (!session.status.equals("active") || !session.stage.equals("problem")
                 || session.pendingTurnId != null || session.activeReteachId != null
                 || session.returnReteachId != null

@@ -28,3 +28,46 @@ active/problem, 세션 버전, 진행 중 대화·재설명·미확인 문항 �
 
 V1~V9 마이그레이션과 B HTTP 응답 형식은 변경하지 않습니다.
 재설명 대상 조회·해설·리포트·학습 종료의 C 어댑터는 별도 후속 작업입니다.
+
+## 첫 답안 제출
+
+POST /api/v1/sessions/{sessionId}/problems/{problemId}/attempts
+
+로그인 쿠키, X-CSRF-Token, Idempotency-Key가 필요합니다.
+JSON 본문은 answer(공백 제외 필수, 최대 2,000자), work(공백 제외 필수, 최대 4,000자)입니다.
+응답은 최초 제출과 성공 재전송 모두 201이며 Cache-Control: no-store를 반환합니다.
+
+```json
+{"answer":"200만 원","work":"잔존가치를 뺀 원가를 사용 기간에 나눕니다."}
+```
+
+성공 응답은 attemptId, problemId, attemptNo, judgement, availableActions, nextProblemId입니다.
+정답·해설·채점 기준·원래 풀이 내용은 응답에 포함하지 않습니다.
+정답은 문항을 확정하고 next_problem 또는 finish_problems를 반환합니다.
+앞 문항이 확정되기 전 다음 문항의 제출은 409 PREVIOUS_PROBLEM_REQUIRED입니다.
+오답은 문항을 확정하지 않고 reteach·view_solution 이름을 반환합니다.
+이 두 동작의 실제 C 연결·해설 API는 후속 작업이며 아직 사용 가능한 완성 기능이 아닙니다.
+pending_review는 wait_review로 구분하며 오답으로 집계하지 않습니다.
+
+회원별 키 공간에서 세션·문항·답·풀이의 SHA-256 요청 지문을 검증합니다.
+같은 키·같은 본문은 DB의 동일한 첫 답안·판정을 복원합니다. 이후 문항 진행이나 학습 중단 뒤에도 같은 결과입니다.
+같은 키에 다른 본문·대상은 409 IDEMPOTENCY_KEY_REUSED이고,
+첫 시도 뒤 새 키로 제출하면 409 FIRST_ATTEMPT_ALREADY_SUBMITTED입니다.
+재설명 후 재시도 API를 추가할 때도 이 첫 독립 답안을 변경하면 안 됩니다.
+
+새 제출은 B의 같은 회원 → 세션 잠금 안에서 소유권·최신 상태·문항 근거 버전을 확인합니다.
+이미 읽은 B 엔티티도 잠금 후 refresh하여 오래된 상태로 판정하지 않습니다.
+답안 저장·판정 저장·정답 문항 확정은 하나의 DB 트랜잭션입니다.
+동시 같은 키는 한 결과로 수렴하고 다른 키의 중복 첫 시도는 거절합니다.
+채점 실패·잘못된 판정은 502로 전체 롤백하므로 같은 키·본문으로 재시도할 수 있습니다.
+
+일반 설정에 실제 채점기는 아직 없으며 503 ASSESSMENT_GRADING_PENDING을 반환합니다.
+ASSESSMENT_DEMO_ENABLED=true에서만 FixedAnswerGrader가 금액(원·만원)을 비교합니다.
+이는 풀이의 이유·논리·원문 근거를 평가하지 않는 임시 채점입니다.
+현재 채점 포트는 DB 잠금 안에서 실행하는 로컬 연산 전용입니다.
+후속 Gemini 채점은 외부 호출을 이 트랜잭션에 넣지 말고, 입력 저장·실행 임대·잠금 밖 호출·버전 재검증 저장과
+타임아웃·사용량·재시도 정책을 별도로 구현해야 합니다.
+
+미로그인 401, CSRF 누락·오류 403, 타인/없는/잘못된 ID 404,
+입력·요청 키 오류 422, JSON 파싱 오류 400입니다. 오류 본문은 code·message이며 비공개 답안을 담지 않습니다.
+정상 결과는 기존 V9 테이블에 저장합니다. 마이그레이션 추가·기존 SQL 변경은 없습니다.
