@@ -216,6 +216,31 @@ class MaterialApiTest {
         assertThat(String.join("", parts).replace("\n", "")).hasSize(1500 * 2 + 4500);
     }
 
+    @Test
+    void supplementaryCharactersSurviveChunkAndDefaultTitleBoundariesInTheDatabase() throws Exception {
+        var member = member("unicode@example.com");
+        for (String text : List.of("a".repeat(1999) + "😀" + "tail",
+                "a".repeat(39) + "😀" + "b".repeat(1958) + "😀" + "tail")) {
+            var response = createText(member, UUID.randomUUID().toString(), text,
+                    Map.of("name", "문자 보존", "scope", "실제 원문"));
+            assertThat(response.getStatus()).isEqualTo(201);
+            var created = body(response);
+            var materialId = UUID.fromString(created.path("materialId").asText());
+            var stored = jdbc.queryForObject(
+                    "SELECT string_agg(text,'' ORDER BY seq) FROM teachmi.source_chunk WHERE material_id=?",
+                    String.class, materialId);
+            assertThat(stored).isEqualTo(text);
+            assertThat(created.path("title").asText()).isEqualTo(text.substring(0, text.indexOf("😀") == 39 ? 39 : 40));
+            var chunks = MaterialService.split(text);
+            assertThat(chunks).allSatisfy(part -> assertThat(part.length()).isLessThanOrEqualTo(2000));
+            var conceptId = created.path("concepts").get(0).path("conceptId").asText();
+            var ids = created.path("concepts").get(0).path("sourceChunkIds");
+            var source = sources.readOwned(member.id(), materialId.toString(), conceptId,
+                    java.util.stream.StreamSupport.stream(ids.spliterator(), false).map(JsonNode::asText).toList());
+            assertThat(String.join("", source.chunks().stream().map(LearningSourceReader.Chunk::text).toList())).isEqualTo(text);
+        }
+    }
+
     // ---------------------------------------------------------------- helpers
 
     Member member(String email) throws Exception {

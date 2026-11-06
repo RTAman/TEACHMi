@@ -1,10 +1,12 @@
 package com.teachmi.backend.auth;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.LinkedHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,40 +15,52 @@ import org.springframework.stereotype.Component;
  */
 @Component
 class LoginThrottle {
+    static final int MAX_TRACKED_EMAILS = 10_000;
     private final AuthProperties properties;
-    private final Map<String, Deque<Instant>> failures = new ConcurrentHashMap<>();
+    private final Clock clock;
+    private final int maxTrackedEmails;
+    private final Map<String, Deque<Instant>> failures = new LinkedHashMap<>();
 
+    @Autowired
     LoginThrottle(AuthProperties properties) {
+        this(properties, Clock.systemUTC(), MAX_TRACKED_EMAILS);
+    }
+
+    LoginThrottle(AuthProperties properties, Clock clock, int maxTrackedEmails) {
+        if (maxTrackedEmails <= 0) throw new IllegalArgumentException("A positive cache bound is required");
         this.properties = properties;
+        this.clock = clock;
+        this.maxTrackedEmails = maxTrackedEmails;
     }
 
-    boolean isBlocked(String key) {
+    synchronized boolean isBlocked(String key) {
+        removeExpired(clock.instant());
         var queue = failures.get(key);
-        if (queue == null) {
-            return false;
-        }
-        synchronized (queue) {
-            prune(queue);
-            return queue.size() >= properties.loginMaxFailures();
-        }
+        // Do not evict active limits: rotating email addresses must not reset another user's limit.
+        return queue == null ? failures.size() >= maxTrackedEmails : queue.size() >= properties.loginMaxFailures();
     }
 
-    void recordFailure(String key) {
+    synchronized void recordFailure(String key) {
+        var now = clock.instant();
+        removeExpired(now);
+        if (!failures.containsKey(key) && failures.size() >= maxTrackedEmails) return;
         var queue = failures.computeIfAbsent(key, ignored -> new ArrayDeque<>());
-        synchronized (queue) {
-            prune(queue);
-            queue.addLast(Instant.now());
-        }
+        // Requests already checking a password can fail concurrently after the limit is reached.
+        while (queue.size() >= properties.loginMaxFailures()) queue.removeFirst();
+        queue.addLast(now);
     }
 
-    void reset(String key) {
+    synchronized void reset(String key) {
         failures.remove(key);
     }
 
-    private void prune(Deque<Instant> queue) {
-        var cutoff = Instant.now().minus(properties.loginFailureWindow());
-        while (!queue.isEmpty() && queue.peekFirst().isBefore(cutoff)) {
-            queue.pollFirst();
+    private void removeExpired(Instant now) {
+        var cutoff = now.minus(properties.loginFailureWindow());
+        var entries = failures.entrySet().iterator();
+        while (entries.hasNext()) {
+            var queue = entries.next().getValue();
+            while (!queue.isEmpty() && !queue.peekFirst().isAfter(cutoff)) queue.removeFirst();
+            if (queue.isEmpty()) entries.remove();
         }
     }
 }

@@ -310,8 +310,9 @@ public class MaterialService {
                     parts.add(current.toString());
                     current.setLength(0);
                 }
-                parts.add(p.substring(0, CHUNK_TARGET_CHARS));
-                p = p.substring(CHUNK_TARGET_CHARS).strip();
+                int end = safeBoundary(p, CHUNK_TARGET_CHARS);
+                parts.add(p.substring(0, end));
+                p = p.substring(end).strip();
             }
             if (!p.isEmpty()) {
                 if (current.length() > 0) {
@@ -328,7 +329,14 @@ public class MaterialService {
 
     private static String defaultTitle(String text) {
         String first = text.lines().map(String::strip).filter(line -> !line.isEmpty()).findFirst().orElse("직접 입력 자료");
-        return first.length() > 40 ? first.substring(0, 40) : first;
+        return first.length() > 40 ? first.substring(0, safeBoundary(first, 40)) : first;
+    }
+
+    /** Keep the UTF-16 storage limit without splitting a supplementary Unicode character. */
+    private static int safeBoundary(String text, int limit) {
+        int end = Math.min(text.length(), limit);
+        return end > 0 && end < text.length() && Character.isHighSurrogate(text.charAt(end - 1))
+                && Character.isLowSurrogate(text.charAt(end)) ? end - 1 : end;
     }
 
     static String label(String kind, int from, int to) {
