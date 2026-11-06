@@ -3,7 +3,7 @@
   "info": {
     "title": "TEACHMi backend B HTTP API",
     "version": "1.0.0",
-    "description": "현재 구현된 B HTTP API만 기술합니다. 모든 동작에 CurrentMember/서버 Principal 인증이 필요합니다. A의 실제 인증 전송 방식이 미정이라 가상의 JWT·쿠키 securityScheme은 선언하지 않습니다. A의 인증·자료/원문 및 C의 실제 문항·평가 연결은 대기 상태입니다. 내부 Java 서비스는 HTTP 경로가 아니며 API_HANDOFF.md를 참고하세요."
+    "description": "현재 구현된 B HTTP API입니다. A의 TEACHMI_SESSION 쿠키로 인증하며 변경 요청은 로그인 또는 /auth/me에서 받은 X-CSRF-Token이 필요합니다. 직접 입력 자료·개념·원문은 A와 연결됐고 파일 업로드/분석 및 C의 실제 문항·평가 연결은 후속 작업입니다. 내부 Java 서비스는 HTTP 경로가 아닙니다."
   },
   "servers": [
     {
@@ -14,7 +14,9 @@
   "x-authentication": {
     "required": true,
     "principal": "CurrentMember.requireId(HttpServletRequest) or authenticated Servlet Principal",
-    "transportStatus": "pending-A-integration"
+    "transportStatus": "cookie-and-csrf",
+    "cookieName": "TEACHMI_SESSION",
+    "csrfHeader": "X-CSRF-Token"
   },
   "x-error-codes-not-exhaustive": true,
   "paths": {
@@ -26,6 +28,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "requestBody": {
@@ -81,6 +86,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
           }
         }
       }
@@ -177,6 +185,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "requestBody": {
@@ -223,6 +234,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
           }
         }
       }
@@ -239,6 +253,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "requestBody": {
@@ -285,6 +302,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
           }
         }
       }
@@ -302,6 +322,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "requestBody": {
@@ -348,6 +371,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
           }
         }
       }
@@ -365,6 +391,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
           }
         ],
         "requestBody": {
@@ -411,6 +440,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
           }
         }
       }
@@ -484,6 +516,16 @@
           "minLength": 1,
           "maxLength": 128,
           "pattern": "^(?![\\s\\S]*\\u0000)[\\s\\S]*\\S[\\s\\S]*$"
+        }
+      },
+      "CsrfToken": {
+        "in": "header",
+        "description": "로그인 또는 GET /api/v1/auth/me 응답의 csrfToken. 쿠키 인증 변경 요청에 필요. 누락·불일치는 B 실행 전 403.",
+        "required": true,
+        "name": "X-CSRF-Token",
+        "schema": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },
@@ -633,6 +675,19 @@
         "x-error-codes": [
           "LEARNING_EVIDENCE_INCONSISTENT"
         ]
+      },
+      "CsrfForbidden": {
+        "description": "A 공통 인증 필터의 CSRF 누락·불일치. B 서비스와 입력 저장은 실행되지 않았습니다. /auth/me로 토큰을 확인한 뒤 같은 키·본문으로 재전송하세요.",
+        "x-error-codes": [
+          "CSRF_TOKEN_INVALID"
+        ],
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CsrfErrorBody"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -2215,7 +2270,39 @@
           }
         },
         "nullable": true
+      },
+      "CsrfErrorBody": {
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "CSRF_TOKEN_INVALID"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "sessionCookie": {
+        "description": "A의 /api/v1/auth/login이 발급하는 HttpOnly 쿠키. 만료·폐기 시 401. 쿠키 이름 변경 시 명세도 함께 갱신하세요.",
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "TEACHMI_SESSION"
       }
     }
-  }
+  },
+  "security": [
+    {
+      "sessionCookie": []
+    }
+  ]
 }

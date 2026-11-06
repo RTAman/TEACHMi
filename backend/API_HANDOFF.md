@@ -4,9 +4,9 @@ B의 HTTP 계약은 [api/openapi.json](api/openapi.json), 실행 도구는 [api/
 
 ## 준비 상태와 인증
 
-B의 세션·Gemini 어댑터·대화·복원·재설명·근거 조회와 C용 상태 전환은 구현됐습니다. **운영용 A 인증/자료/원문 어댑터와 C의 문항/평가/리포트는 아직 연결 대기입니다.** 전체 성공 예시는 해당 어댑터와 실제 회원 소유 자료·문항이 준비된 뒤 실행할 수 있습니다.
+B의 세션·Gemini 어댑터·대화·복원·재설명·근거 조회와 C용 상태 전환은 구현됐습니다. **A의 쿠키 인증과 직접 입력 자료·개념·원문 연결도 구현됐습니다.** A의 파일 업로드/분석과 C의 문항/평가/리포트는 후속 연결 작업입니다. 직접 입력 학습은 실제 로그인과 내 자료로 시작할 수 있으며 AI 생성에는 Gemini 설정이 필요합니다.
 
-모든 B HTTP 요청에는 A가 검증한 CurrentMember 또는 서버의 인증된 Principal이 필요합니다. 아직 인증 전송 방식이 확정되지 않았으므로 명세에 임의의 JWT·쿠키 securityScheme을 넣지 않았습니다. x-authentication.required=true와 401 응답으로 요구 사항을 명시했습니다. 이는 익명 API라는 뜻이 아니며, 도구가 인증을 만들어 주지도 않습니다. A 방식 확정 후 securitySchemes와 실제 인증 테스트를 함께 갱신하세요.
+모든 B HTTP 요청은 A의 TEACHMI_SESSION HttpOnly 쿠키로 인증합니다. 변경 요청에는 로그인 또는 GET /api/v1/auth/me 응답의 csrfToken을 X-CSRF-Token으로 보냅니다. 명세의 sessionCookie securityScheme과 변경 요청의 필수 CSRF 헤더에 반영했습니다. 쿠키 이름을 환경 변수로 바꾸면 명세와 클라이언트도 함께 갱신하세요.
 
 PowerShell 도구는 실제 로그인에서 얻은 AuthHeaders 또는 WebRequestSession을 전달받습니다. A가 요구하는 CSRF 등 추가 헤더도 AuthHeaders로 전달합니다. 임의의 X-Member-Id로 인증을 우회하거나 데모 회원을 제공하지 않습니다. 자격 증명은 메모리나 로컬 비밀 저장소에서 읽고 이 문서·스크립트·Git에 입력하지 마세요.
 
@@ -34,9 +34,9 @@ PowerShell 7에서 backend 폴더를 기준으로 실행합니다. Windows·macO
 ```powershell
 $invoke = './api/Invoke-LearningRequest.ps1'
 $connection = @{ BaseUri = [uri]'http://localhost:8080'; AuthHeaders = @{} }
-# A의 실제 인증 구현에 맞춰 아래 중 필요한 값을 메모리에서 추가합니다.
-# $connection.AuthHeaders = $actualAuthenticationHeaders
+# 가입/로그인 후 받은 값을 메모리에서 전달합니다. 실제 준비 명령은 AUTH_MATERIALS.md 참고.
 # $connection.WebSession = $actualLoginSession
+# $connection.AuthHeaders = @{ 'X-CSRF-Token' = $login.csrfToken }
 
 # Preview는 네트워크를 호출하지 않고 인증 헤더·쿠키도 표시하지 않습니다.
 & $invoke @connection -OperationId getActiveSession -Preview
@@ -169,9 +169,11 @@ $evidence.Body.originalLearning
 | C 평가 상태 | AssessmentStateSource.loadOwnedReport | 실제 평가 완료·리포트 개정/근거·종료 승인 |
 | C 상태 저장 | LearningAssessmentService.publishReport / completeLearning | B 잠금 → C DB 저장 → 상태 검증 → 함께 커밋 |
 
-이 내부 메서드는 HTTP 경로가 아닙니다. [재설명 계약](RETEACH.md), [근거 계약](LEARNING_EVIDENCE.md), [평가·종료 계약](ASSESSMENT_TRANSITIONS.md)의 잠금·트랜잭션·승인 규칙을 따르세요. completed는 C의 명시적 승인 뒤 설정되며, 설명 완료나 리포트 준비만으로 자동 종료하지 않습니다. C의 실제 점수·리포트·종료 기준과 A의 실제 인증/자료 연결이 남아 있습니다.
+이 내부 메서드는 HTTP 경로가 아닙니다. [재설명 계약](RETEACH.md), [근거 계약](LEARNING_EVIDENCE.md), [평가·종료 계약](ASSESSMENT_TRANSITIONS.md)의 잠금·트랜잭션·승인 규칙을 따르세요. completed는 C의 명시적 승인 뒤 설정되며, 설명 완료나 리포트 준비만으로 자동 종료하지 않습니다. C의 실제 점수·리포트·종료 기준과 A의 파일 업로드/분석 연결이 남아 있습니다.
 
 ## 오류·계약 검증 범위
+
+인증 쿠키가 없거나 만료·폐기되면 401입니다. 로그인 상태에서 CSRF가 없거나 틀리면 B 실행 전에 403 CSRF_TOKEN_INVALID를 반환합니다. 이 공통 필터 응답은 code·message 두 필드이며 currentSession은 없습니다. 아직 B 입력이 저장되지 않았으므로 /auth/me로 토큰을 확인한 뒤 같은 키·본문으로 재전송하세요. 실제 A 필터·쿠키·원문과 B의 학습·재로그인 복원은 LearningAuthenticatedContractTest에서 검증합니다. AI만 테스트 경계로 대체합니다.
 
 B의 도메인/입력 오류 본문은 code·message·nullable currentSession입니다. 401/404/409/422/429/502/503과 evidence의 500을 명세화했습니다. Spring MVC의 JSON/UUID 바인딩 400은 본문이 비거나 프레임워크 형식일 수 있습니다. 이 응답은 x-body-optional로 표시하고 계약 테스트는 400의 body.missing만 예외 처리합니다. 성공/도메인 오류 검증과 204 본문 금지에는 이 예외를 적용하지 않습니다. 프레임워크의 405/415 등도 고정 ErrorBody라고 가정하지 마세요.
 

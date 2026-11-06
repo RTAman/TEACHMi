@@ -2,9 +2,9 @@
 
 Gemini 어댑터는 기존 `LearningContentGenerator`를 구현합니다. 기존 모드 선택·설명 시작 API의 요청과 응답 형식을 사용하고 요약과 첫 질문을 DB에 저장합니다. GET과 성공 요청의 재전송은 저장한 내용을 돌려줍니다.
 
-## A 연결 대기
+## A 원문 연결
 
-A의 실제 자료·원문 조회 구현은 아직 저장소에 없습니다. A는 `LearningSourceReader` Spring bean에서 회원의 자료 소유권, 개념과 자료의 관계, 요청한 원문 조각의 소속을 검증한 뒤 실제 텍스트를 반환해야 합니다.
+A의 `MaterialLearningSources`가 `LearningSourceReader`를 구현합니다. 직접 입력 자료에서 회원의 소유권, 개념과 자료의 관계, 요청한 원문 조각의 소속을 검증한 뒤 실제 텍스트를 반환합니다. 파일 업로드·분석은 후속 작업이며, A의 인증·자료 사용 방법은 [연동 계약](AUTH_MATERIALS.md)을 참고하세요.
 
 `OwnedSource(memberId, materialId, conceptId, chunks)`의 회원·자료·개념은 요청과 일치해야 합니다. 각 Chunk에는 고유 ID와 비어 있지 않은 원문을 넣습니다. ID 집합은 세션 생성 시 `ConceptSource`가 제공한 출처 ID와 정확히 일치해야 합니다. 없거나 타인 소유인 자료는 `LearningException.notFound()`를 던집니다.
 
