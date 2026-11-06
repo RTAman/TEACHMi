@@ -23,4 +23,8 @@ public class LearningException extends RuntimeException {
     public String code() {
         return code;
     }
+
+    public int status() {
+        return status;
+    }
 }
