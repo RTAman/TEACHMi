@@ -26,6 +26,13 @@ management:
         include: health
 
 teachmi:
+  auth:
+    cookie-name: ${AUTH_COOKIE_NAME:TEACHMI_SESSION}
+    cookie-secure: ${AUTH_COOKIE_SECURE:true}
+    cookie-same-site: ${AUTH_COOKIE_SAME_SITE:Lax}
+    session-ttl: ${AUTH_SESSION_TTL:7d}
+    login-max-failures: ${AUTH_LOGIN_MAX_FAILURES:5}
+    login-failure-window: ${AUTH_LOGIN_FAILURE_WINDOW:15m}
   gemini:
     enabled: ${GEMINI_ENABLED:false}
     api-key: ${GEMINI_API_KEY:}

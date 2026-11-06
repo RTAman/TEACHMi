@@ -45,13 +45,23 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 | B | `learning` · [#5](https://github.com/RTAman/TEACHMi/issues/5) | [학습 세션·AI 대화](../TEACHMi%20백엔드%20B%20개발%20가이드.docx) | 학습 세션 ID, 재개할 단계, 최초·최종 설명과 도움 기록 |
 | C | `home`, `assessment`, `report` · [#6](https://github.com/RTAman/TEACHMi/issues/6) | [홈·평가·리포트·배포](../TEACHMi%20백엔드%20C%20개발%20가이드.docx) | 회원별 홈 응답, 답안 제출 예시, 리포트 조회 결과 |
 
-가입·로그인은 이메일과 비밀번호를 기본안으로 둡니다. A가 공통 인증을 연결하면 B와 C의 학습 API는 서버가 확인한 현재 회원을 사용합니다. 로그인 세션 만료 후에도 학습 기록은 계정에 남아야 합니다.
+가입·로그인은 A의 이메일·비밀번호와 TEACHMI_SESSION 쿠키를 사용합니다. 변경 요청은 X-CSRF-Token이 필요하며 B와 C는 서버가 확인한 현재 회원을 사용합니다. 로그인 세션 만료 후에도 학습 기록은 계정에 남습니다.
+
+### 파트별 연동 문서
+
+프론트엔드와 다른 파트는 아래 표에서 담당 파트의 문서를 찾습니다. 연동 가이드는 `backend/`에, OpenAPI 명세는 `backend/api/`에 둡니다.
+
+| 담당 | 연동 가이드 (프론트·다른 파트) | OpenAPI 명세 | 기능별 계약 |
+| --- | --- | --- | --- |
+| A파트 (인증·자료) | [AUTH_API_HANDOFF.md](AUTH_API_HANDOFF.md) | [api/auth-materials.openapi.json](api/auth-materials.openapi.json) | [AUTH_MATERIALS.md](AUTH_MATERIALS.md) |
+| B파트 (학습·대화) | [API_HANDOFF.md](API_HANDOFF.md) | [api/openapi.json](api/openapi.json) | 아래 각 계약 문서 |
+| C파트 (홈·평가·리포트) | 준비 중 | 준비 중 | 준비 중 |
 
 B의 세션 생성·조회 API, 새 시작 확인과 재시도 규칙, A가 구현할 인증·개념 연결 인터페이스는 [학습 세션 연동 계약](LEARNING_SESSIONS.md)에 정리했습니다.
 
 로그인 후 세션 ID 없이 이어하기 대상을 찾으려면 `GET /api/v1/sessions/active`를 사용합니다. 진행 중 학습은 기존 SessionView, 대상이 없으면 204를 반환합니다. C의 홈도 `LearningSessionService.getActive`를 재사용할 수 있습니다.
 
-Gemini 환경 변수, A 원문 연결 대기 상태, 출처 검증과 실 API 테스트는 [Gemini 콘텐츠 생성 안내](GEMINI_CONTENT.md)를 확인하세요.
+Gemini 환경 변수, A의 직접 입력 원문 연결, 출처 검증과 실 API 테스트는 [Gemini 콘텐츠 생성 안내](GEMINI_CONTENT.md)를 확인하세요.
 
 사용자 설명과 도움 전송, 단계 전환, 실패한 전송의 재접속·재시도, C에 전달할 메시지 근거는 [대화 API 계약](CONVERSATION_TURNS.md)에 정리했습니다.
 

@@ -100,7 +100,7 @@ POST의 `Idempotency-Key`는 회원별로 구분하며 1~128자입니다. 한 �
 
 실제 Gemini 생성 어댑터와 A의 원문 조회 연결은 [Gemini 콘텐츠 생성 안내](GEMINI_CONTENT.md)를 확인하세요.
 
-`learning.CurrentMember`의 `requireId(HttpServletRequest)`를 구현한 Spring bean에서 실제 인증 세션의 만료·폐기를 확인하고 회원 ID를 반환합니다. 기본 경로는 Servlet의 인증된 `Principal.getName()`을 회원 ID로 읽습니다. 로그인 방식이 정해지면 A의 어댑터로 명시적으로 매핑합니다. 쿠키 발급·로그아웃·CSRF 방어는 A의 인증 계층에서 연결합니다.
+`auth.AuthCurrentMember`가 `learning.CurrentMember`를 구현합니다. AuthFilter가 TEACHMI_SESSION 쿠키의 만료·폐기를 확인한 뒤 회원을 연결하며, 변경 요청은 X-CSRF-Token이 필요합니다. Servlet Principal에도 같은 회원 ID를 제공합니다. 쿠키 발급·로그아웃·CSRF 규칙은 [A 인증 계약](AUTH_MATERIALS.md)을 참고하세요.
 
 `learning.ConceptSource`의 `loadOwnedConcept(memberId, materialId, conceptId)`를 구현한 Spring bean에서 다음을 확인합니다.
 

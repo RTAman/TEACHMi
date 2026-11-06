@@ -1,0 +1,1037 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "TEACHMi backend A파트 HTTP API (인증·자료)",
+    "version": "1.0.0",
+    "description": "백엔드 A파트의 회원 인증과 자료·개념 API입니다. 로그인은 이메일+비밀번호이며 TEACHMI_SESSION HttpOnly 쿠키로 유지합니다. 로그인 상태에서 POST·PUT·PATCH·DELETE 요청은 X-CSRF-Token 헤더가 필요합니다(로그인·회원가입 제외). 값은 로그인 응답 또는 GET /api/v1/auth/me의 csrfToken입니다. 오류 본문은 {code, message}입니다. 연동 순서와 예시 코드는 backend/AUTH_API_HANDOFF.md를 참고하세요."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080",
+      "description": "로컬 개발 서버. 배포 주소는 C가 정합니다."
+    }
+  ],
+  "tags": [
+    {
+      "name": "auth",
+      "description": "회원가입·로그인·로그인 확인·로그아웃"
+    },
+    {
+      "name": "materials",
+      "description": "S02 자료 등록·개념 선택"
+    }
+  ],
+  "paths": {
+    "/api/v1/auth/signup": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "signup",
+        "summary": "회원가입",
+        "description": "가입만 하고 로그인시키지 않습니다. 성공하면 로그인 화면으로 이동합니다. 이메일은 소문자로 정규화됩니다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              },
+              "example": {
+                "email": "student1@example.com",
+                "password": "correct-horse"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "가입 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON 형식 오류 (MALFORMED_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "이미 가입한 이메일 (EMAIL_ALREADY_REGISTERED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "이메일 형식 (INVALID_EMAIL), 비밀번호 8~64자 (INVALID_PASSWORD), 항목 누락 (INVALID_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login",
+        "summary": "로그인",
+        "description": "성공하면 TEACHMI_SESSION 쿠키(HttpOnly, SameSite=Lax, 7일)를 발급하고 csrfToken을 돌려줍니다. 미등록 이메일과 틀린 비밀번호는 같은 401입니다.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              },
+              "example": {
+                "email": "student1@example.com",
+                "password": "correct-horse"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "로그인 완료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginView"
+                }
+              }
+            },
+            "headers": {
+              "Set-Cookie": {
+                "description": "TEACHMI_SESSION=...; Path=/; HttpOnly; SameSite=Lax",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON 형식 오류 (MALFORMED_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "이메일 또는 비밀번호가 올바르지 않음 (INVALID_CREDENTIALS)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "항목 누락 (INVALID_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "15분 안에 5번 실패 (TOO_MANY_LOGIN_ATTEMPTS)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "getMe",
+        "summary": "로그인 확인",
+        "description": "앱 시작(스플래시)에서 호출합니다. 200이면 홈, 401이면 로그인 화면입니다. 새로고침 뒤 csrfToken을 다시 받을 때도 씁니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "로그인 상태",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "로그인 필요 (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "logout",
+        "summary": "로그아웃",
+        "description": "서버의 로그인 세션을 폐기하고 쿠키를 지웁니다. 로그인 상태가 아니어도 204입니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {}
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfTokenOptional"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "로그아웃 완료. 쿠키 삭제 Set-Cookie 포함"
+          },
+          "403": {
+            "description": "CSRF 토큰 누락·불일치 (CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/materials": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "operationId": "createTextMaterial",
+        "summary": "직접 입력 자료 등록 (S02-5)",
+        "description": "본문을 저장하고 바로 status=done입니다. concept를 함께 보내면 그 개념이 자료 전체를 근거로 만들어집니다. 파일 업로드(multipart, 202)는 다음 버전에서 추가됩니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTextMaterialRequest"
+              },
+              "example": {
+                "text": "감가상각은 유형자산의 취득원가를 내용연수 동안 배분하는 과정이다.",
+                "concept": {
+                  "name": "감가상각의 개념",
+                  "scope": "취득원가를 내용연수에 걸쳐 배분하는 이유"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "자료 생성. 같은 키·같은 본문 재전송도 처음 결과를 201로 반환",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialView"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "/api/v1/materials/{materialId}",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON 형식 오류 (MALFORMED_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "로그인 필요 (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF 토큰 누락·불일치 (CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "같은 키를 다른 요청에 사용 (IDEMPOTENCY_KEY_REUSED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "본문 비어 있음 (TEXT_REQUIRED), 개념 이름·범위 누락 (CONCEPT_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED), 길이 초과 (INVALID_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/materials/{materialId}": {
+      "get": {
+        "tags": [
+          "materials"
+        ],
+        "operationId": "getMaterial",
+        "summary": "자료 조회 (S02-2~4)",
+        "description": "분석 상태, 오류, 개념 후보, 원문 위치를 돌려줍니다. 다른 회원의 자료와 형식이 틀린 ID는 404입니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MaterialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "자료",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "로그인 필요 (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 다른 회원의 자료 (NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/materials/{materialId}/concepts": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "operationId": "addConcept",
+        "summary": "목록에 없는 개념 추가 (S02-5 새 입력)",
+        "description": "목록 맨 위에 추가됩니다. 근거는 sourceChunkIds(자료의 원문 조각) 또는 evidenceText(직접 입력)로 정합니다. 직접 입력 자료는 둘 다 생략하면 자료 전체가 근거입니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MaterialId"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddConceptRequest"
+              },
+              "example": {
+                "name": "내용연수",
+                "scope": "자산을 사용할 것으로 예상하는 기간",
+                "evidenceText": "내용연수는 자산을 사용할 것으로 예상하는 기간이다."
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "개념 추가",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON 형식 오류 (MALFORMED_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "로그인 필요 (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF 토큰 누락·불일치 (CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 다른 회원의 자료 (NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "분석 전 자료 (MATERIAL_NOT_READY), 키 재사용 (IDEMPOTENCY_KEY_REUSED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "이름·범위 누락 (CONCEPT_REQUIRED), 이 자료에 없는 원문 조각 (INVALID_SOURCE), 파일 자료의 근거 누락 (EVIDENCE_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/materials/{materialId}/concepts/{conceptId}": {
+      "patch": {
+        "tags": [
+          "materials"
+        ],
+        "operationId": "updateConcept",
+        "summary": "개념 이름·범위 수정 (S02-5 수정)",
+        "description": "보낸 항목만 바뀝니다. 수정한 개념은 custom=true가 됩니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MaterialId"
+          },
+          {
+            "$ref": "#/components/parameters/ConceptId"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConceptRequest"
+              },
+              "example": {
+                "scope": "취득원가를 내용연수에 걸쳐 배분하는 이유"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "수정한 개념",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "JSON 형식 오류 (MALFORMED_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "로그인 필요 (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF 토큰 누락·불일치 (CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 다른 회원의 자료·개념 (NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "수정할 항목 없음 (NOTHING_TO_UPDATE), 빈 값 (CONCEPT_REQUIRED), 길이 초과 (INVALID_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "TEACHMI_SESSION",
+        "description": "로그인 응답의 HttpOnly 쿠키. 브라우저는 credentials: 'include'로 자동 전송합니다."
+      }
+    },
+    "parameters": {
+      "CsrfToken": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": true,
+        "description": "로그인 응답 또는 /auth/me의 csrfToken",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CsrfTokenOptional": {
+        "name": "X-CSRF-Token",
+        "in": "header",
+        "required": false,
+        "description": "로그인 상태라면 필요",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "description": "생성 요청마다 새로 만든 값(예: crypto.randomUUID()). 같은 요청을 재전송할 때는 같은 값",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "MaterialId": {
+        "name": "materialId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ConceptId": {
+        "name": "conceptId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    },
+    "schemas": {
+      "Credentials": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 254,
+            "example": "student1@example.com"
+          },
+          "password": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "8~64자"
+          }
+        }
+      },
+      "MemberView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "email",
+          "csrfToken",
+          "expiresAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          },
+          "csrfToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "로그인 세션 만료 시각(UTC)"
+          }
+        }
+      },
+      "MeView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "email",
+          "csrfToken"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string"
+          },
+          "csrfToken": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "화면 분기에 쓰는 코드"
+          },
+          "message": {
+            "type": "string",
+            "description": "사용자에게 보여줘도 되는 한국어 문구"
+          }
+        }
+      },
+      "ConceptInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "scope"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      },
+      "CreateTextMaterialRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 200,
+            "description": "생략하면 본문 첫 줄(최대 40자)"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 15000
+          },
+          "concept": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ConceptInput"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "AddConceptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "scope"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "evidenceText": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 5000
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "nullable": true,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "UpdateConceptRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 60
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 500
+          }
+        }
+      },
+      "SourceView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "chunkId",
+          "order",
+          "locationKind",
+          "locationNumber",
+          "location"
+        ],
+        "properties": {
+          "chunkId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "locationKind": {
+            "type": "string",
+            "enum": [
+              "page",
+              "slide",
+              "input"
+            ]
+          },
+          "locationNumber": {
+            "type": "integer"
+          },
+          "location": {
+            "type": "string",
+            "description": "화면 표시용. 예: p.6, 슬라이드 3, 직접 입력 1"
+          }
+        }
+      },
+      "ConceptView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "conceptId",
+          "name",
+          "scope",
+          "custom",
+          "sourceChunkIds",
+          "location"
+        ],
+        "properties": {
+          "conceptId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "custom": {
+            "type": "boolean",
+            "description": "사용자가 직접 추가·수정한 개념"
+          },
+          "sourceChunkIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "location": {
+            "type": "string",
+            "nullable": true,
+            "description": "개념 카드의 자료 위치. 예: p.6~9"
+          }
+        }
+      },
+      "MaterialView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "materialId",
+          "sourceType",
+          "title",
+          "fileName",
+          "status",
+          "errorCode",
+          "analysisVersion",
+          "concepts",
+          "sources",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "materialId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceType": {
+            "type": "string",
+            "enum": [
+              "file",
+              "text"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "fileName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "analyzing",
+              "done",
+              "failed"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "format",
+              "size",
+              "no_text",
+              "analysis",
+              null
+            ]
+          },
+          "analysisVersion": {
+            "type": "integer"
+          },
+          "concepts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConceptView"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceView"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

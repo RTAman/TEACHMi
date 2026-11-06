@@ -260,10 +260,12 @@ class LearningOpenApiContractTest {
                 : Map.of("kind", kind, "text", text, "expectedVersion", version(id)), 200, true);
     }
     private JsonNode write(MockHttpServletRequestBuilder request, String key, Object body, int status, boolean valid) throws Exception {
-        return exchange(request.principal(() -> "member-1").header("Idempotency-Key", key)
+        return exchange(request.principal(() -> "member-1").header("Idempotency-Key", key).header("X-CSRF-Token", "contract-csrf")
                 .contentType("application/json").content(json.writeValueAsString(body)), status, valid);
     }
     private JsonNode exchange(MockHttpServletRequestBuilder builder, int status, boolean validRequest) throws Exception {
+        // B-only fixture authentication; real A cookies and CSRF are verified in LearningAuthenticatedContractTest.
+        builder.header("Cookie", "TEACHMI_SESSION=contract-cookie");
         MvcResult result = mvc.perform(builder).andReturn();
         assertThat(result.getResponse().getStatus()).isEqualTo(status);
         var request = result.getRequest(); var response = result.getResponse();
