@@ -2,6 +2,9 @@
 
 [백엔드 A 이슈 #4](https://github.com/RTAman/TEACHMi/issues/4)의 1차 구현입니다. 이메일·비밀번호 가입과 쿠키 로그인, 직접 입력 자료·개념 API, B가 정의한 `CurrentMember`·`ConceptSource`·`LearningSourceReader` 연결을 제공합니다. **파일 업로드·분석·재시도(`POST /materials` multipart, `/retry`)는 다음 PR에서 추가합니다.**
 
+- 요청·응답 명세: [api/auth-materials.openapi.json](api/auth-materials.openapi.json) (`AuthMaterialsOpenApiContractTest`가 실제 응답과 대조)
+- 프론트 연동 가이드: [api/FRONTEND_GUIDE.md](api/FRONTEND_GUIDE.md)
+
 ## 로그인 방식
 
 | 항목 | 규칙 |
