@@ -3,9 +3,11 @@ package com.teachmi.backend.assessment;
 import java.util.List;
 import com.teachmi.backend.learning.SessionView;
 import org.springframework.stereotype.Component;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 /** Gemini 문제 생성을 연결하기 전까지 쓰는 임시 감가상각 문항. 다른 개념의 시연에는 쓸 수 없다. */
 @Component
+@ConditionalOnProperty(name = "teachmi.assessment.demo-enabled", havingValue = "true")
 class FixedDepreciationProblems implements ProblemGenerator {
     @Override
     public List<Draft> generate(SessionView session) {

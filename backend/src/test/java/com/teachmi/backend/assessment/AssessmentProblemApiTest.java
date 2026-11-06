@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
-@SpringBootTest
+@SpringBootTest(properties = "teachmi.assessment.demo-enabled=true")
 class AssessmentProblemApiTest {
     record Member(String id, Cookie cookie, String csrf) {}
 
@@ -70,6 +70,8 @@ class AssessmentProblemApiTest {
         assertThat(body(second).path("problems").toString()).isEqualTo(body(first).path("problems").toString());
         assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_problem", Integer.class))
                 .isEqualTo(2);
+        assertThat(jdbc.queryForList("SELECT source_chunk_ids FROM teachmi.assessment_problem", String.class))
+                .containsOnly("[]");
     }
 
     @Test
@@ -126,6 +128,11 @@ class AssessmentProblemApiTest {
                 VALUES (?, ?, 'm01', 'c01', ?, 'review', ?, 'active', ?, ?, ?)""",
                 id, member.id(), "{\"name\":\"감가상각\",\"scope\":\"배분 이유\",\"sourceChunkIds\":[\"k01\"]}",
                 stage, finalExplanationId, now, now);
+        if (finalExplanationId != null) jdbc.update("""
+                INSERT INTO teachmi.learning_message
+                (id,session_id,sequence,role,kind,chat_stage,text,source_chunk_ids,created_at)
+                VALUES (?, ?, 1, 'user', 'answer', 'wrapup', '원가를 사용 기간에 배분합니다.', '[]', now())
+                """, finalExplanationId, id);
         return id;
     }
 
