@@ -47,7 +47,15 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 
 가입·로그인은 이메일과 비밀번호를 기본안으로 둡니다. A가 공통 인증을 연결하면 B와 C의 학습 API는 서버가 확인한 현재 회원을 사용합니다. 로그인 세션 만료 후에도 학습 기록은 계정에 남아야 합니다.
 
-A의 로그인 쿠키·CSRF 헤더, 자료·개념 API, B 연결 어댑터, 테스트 회원 준비 방법은 [인증·자료 연동 계약](AUTH_MATERIALS.md)에 정리했습니다.
+### 파트별 연동 문서
+
+프론트엔드와 다른 파트는 아래 표에서 담당 파트의 문서를 찾습니다. 연동 가이드는 `backend/`에, OpenAPI 명세는 `backend/api/`에 둡니다.
+
+| 담당 | 연동 가이드 (프론트·다른 파트) | OpenAPI 명세 | 기능별 계약 |
+| --- | --- | --- | --- |
+| A파트 (인증·자료) | [AUTH_API_HANDOFF.md](AUTH_API_HANDOFF.md) | [api/auth-materials.openapi.json](api/auth-materials.openapi.json) | [AUTH_MATERIALS.md](AUTH_MATERIALS.md) |
+| B파트 (학습·대화) | [API_HANDOFF.md](API_HANDOFF.md) | [api/openapi.json](api/openapi.json) | 아래 각 계약 문서 |
+| C파트 (홈·평가·리포트) | 준비 중 | 준비 중 | 준비 중 |
 
 B의 세션 생성·조회 API, 새 시작 확인과 재시도 규칙, A가 구현할 인증·개념 연결 인터페이스는 [학습 세션 연동 계약](LEARNING_SESSIONS.md)에 정리했습니다.
 

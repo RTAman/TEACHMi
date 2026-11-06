@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "TEACHMi backend A HTTP API (인증·자료)",
+    "title": "TEACHMi backend A파트 HTTP API (인증·자료)",
     "version": "1.0.0",
-    "description": "백엔드 A의 회원 인증과 자료·개념 API입니다. 로그인은 이메일+비밀번호이며 TEACHMI_SESSION HttpOnly 쿠키로 유지합니다. 로그인 상태에서 POST·PUT·PATCH·DELETE 요청은 X-CSRF-Token 헤더가 필요합니다(로그인·회원가입 제외). 값은 로그인 응답 또는 GET /api/v1/auth/me의 csrfToken입니다. 오류 본문은 {code, message}입니다. 연동 순서와 예시 코드는 FRONTEND_GUIDE.md를 참고하세요."
+    "description": "백엔드 A파트의 회원 인증과 자료·개념 API입니다. 로그인은 이메일+비밀번호이며 TEACHMI_SESSION HttpOnly 쿠키로 유지합니다. 로그인 상태에서 POST·PUT·PATCH·DELETE 요청은 X-CSRF-Token 헤더가 필요합니다(로그인·회원가입 제외). 값은 로그인 응답 또는 GET /api/v1/auth/me의 csrfToken입니다. 오류 본문은 {code, message}입니다. 연동 순서와 예시 코드는 backend/AUTH_API_HANDOFF.md를 참고하세요."
   },
   "servers": [
     {

@@ -1,6 +1,6 @@
-# 프론트 연동 가이드: 로그인·자료 등록 (백엔드 A)
+# A파트 API 인수인계: 로그인·자료 등록 프론트 연동
 
-로그인(이메일+비밀번호)과 S02 자료 등록을 붙이는 방법입니다. 요청·응답의 정확한 형식은 [OpenAPI 명세](auth-materials.openapi.json)에 있고, 실제 서버 응답과 일치하는지 CI에서 검사합니다. 학습 세션·대화(S03~S05)는 B의 [openapi.json](openapi.json)과 [API_HANDOFF.md](../API_HANDOFF.md)를 보세요.
+로그인(이메일+비밀번호)과 S02 자료 등록을 붙이는 방법입니다. 요청·응답의 정확한 형식은 [OpenAPI 명세](api/auth-materials.openapi.json)에 있고, 실제 서버 응답과 일치하는지 CI에서 검사합니다. 학습 세션·대화(S03~S05)는 B의 [API_HANDOFF.md](API_HANDOFF.md)와 [api/openapi.json](api/openapi.json)을 보세요. B·C가 쓰는 Java 연결 방법은 [AUTH_MATERIALS.md](AUTH_MATERIALS.md)에 있습니다.
 
 ## 1. 한눈에 보기
 
@@ -189,9 +189,9 @@ Next.js라면 `next.config.js`의 `rewrites`에 같은 규칙을 넣습니다.
 
 ## 6. 로컬에서 직접 해보기
 
-1. 백엔드 실행: [backend/README.md](../README.md)의 "처음 실행하기"
-2. 회원가입·로그인을 화면에서 하거나, 테스트 계정은 [AUTH_MATERIALS.md](../AUTH_MATERIALS.md)의 "테스트 회원 준비"를 따라 만듭니다.
-3. 명세 보기: [auth-materials.openapi.json](auth-materials.openapi.json)을 [Swagger Editor](https://editor.swagger.io)에 붙여 넣으면 화면으로 볼 수 있습니다. TypeScript 타입이 필요하면 `npx openapi-typescript backend/api/auth-materials.openapi.json -o src/api/auth-materials.d.ts`로 생성합니다.
+1. 백엔드 실행: [backend/README.md](README.md)의 "처음 실행하기"
+2. 회원가입·로그인을 화면에서 하거나, 테스트 계정은 [AUTH_MATERIALS.md](AUTH_MATERIALS.md)의 "테스트 회원 준비"를 따라 만듭니다.
+3. 명세 보기: [api/auth-materials.openapi.json](api/auth-materials.openapi.json)을 [Swagger Editor](https://editor.swagger.io)에 붙여 넣으면 화면으로 볼 수 있습니다. TypeScript 타입이 필요하면 `npx openapi-typescript backend/api/auth-materials.openapi.json -o src/api/auth-materials.d.ts`로 생성합니다.
 
 ## 7. 아직 안 되는 것
 
