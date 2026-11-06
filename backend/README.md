@@ -47,6 +47,8 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 
 가입·로그인은 이메일과 비밀번호를 기본안으로 둡니다. A가 공통 인증을 연결하면 B와 C의 학습 API는 서버가 확인한 현재 회원을 사용합니다. 로그인 세션 만료 후에도 학습 기록은 계정에 남아야 합니다.
 
+A의 로그인 쿠키·CSRF 헤더, 자료·개념 API, B 연결 어댑터, 테스트 회원 준비 방법은 [인증·자료 연동 계약](AUTH_MATERIALS.md)에 정리했습니다.
+
 B의 세션 생성·조회 API, 새 시작 확인과 재시도 규칙, A가 구현할 인증·개념 연결 인터페이스는 [학습 세션 연동 계약](LEARNING_SESSIONS.md)에 정리했습니다.
 
 로그인 후 세션 ID 없이 이어하기 대상을 찾으려면 `GET /api/v1/sessions/active`를 사용합니다. 진행 중 학습은 기존 SessionView, 대상이 없으면 204를 반환합니다. C의 홈도 `LearningSessionService.getActive`를 재사용할 수 있습니다.
