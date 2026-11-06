@@ -26,6 +26,8 @@ management:
         include: health
 
 teachmi:
+  assessment:
+    demo-enabled: ${ASSESSMENT_DEMO_ENABLED:false}
   auth:
     cookie-name: ${AUTH_COOKIE_NAME:TEACHMI_SESSION}
     cookie-secure: ${AUTH_COOKIE_SECURE:true}
