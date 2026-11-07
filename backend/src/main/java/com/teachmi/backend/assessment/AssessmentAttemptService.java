@@ -40,7 +40,7 @@ public class AssessmentAttemptService {
         if (key == null || key.isBlank() || key.length() > 128 || key.indexOf('\0') >= 0) {
             throw new ApiException(422,"INVALID_IDEMPOTENCY_KEY","Idempotency-Key는 1~128자로 전달해야 합니다.");
         }
-        var view=sessions.get(member,sessionId); // Ownership even for a historical replay.
+        var view=access.lockOwned(member,sessionId); // Serialize before reading receipts or consuming a return.
         var problem=problems.findByIdAndSessionIdAndMemberId(problemId,sessionId,member)
                 .orElseThrow(AssessmentProblemService::notFound);
         var hash=hash(json.writeValueAsString(new Fingerprint(sessionId,problemId,request)));
@@ -70,7 +70,8 @@ public class AssessmentAttemptService {
             throw new ApiException(409,"ASSESSMENT_EVIDENCE_STALE","문항이 사용한 학습 근거 버전이 변경됐습니다.");
         }
         var ordered=problems.findBySessionIdAndMemberIdOrderBySequence(sessionId,member);
-        if (ordered.stream().anyMatch(p -> p.sequence < problem.sequence && p.confirmedAt == null)) {
+        if (ordered.stream().anyMatch(p -> p.sequence < problem.sequence
+                && !AssessmentProgress.finished(p, attempts.findByProblemIdOrderByAttemptNo(p.id)))) {
             throw new ApiException(409,"PREVIOUS_PROBLEM_REQUIRED","앞 문항을 먼저 완료하세요.");
         }
         var grader=graders.getIfAvailable();
@@ -115,7 +116,7 @@ public class AssessmentAttemptService {
     private AttemptView view(AssessmentAttempt attempt, AssessmentProblem problem) {
         UUID next=null;
         List<String> actions;
-        if (attempt.judgement.equals("correct")) {
+        if (attempt.judgement.equals("correct") || attempt.judgement.equals("pending_review")) {
             next=problems.findBySessionIdAndMemberIdOrderBySequence(attempt.sessionId,attempt.memberId).stream()
                     .filter(p -> p.sequence > problem.sequence).map(p -> p.id).findFirst().orElse(null);
             actions=List.of(next == null ? "finish_problems" : "next_problem");

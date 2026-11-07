@@ -57,7 +57,7 @@ class AssessmentFollowUpService {
     /** 제출한 문항의 정답과 풀이를 공개하고 열람 시점을 남긴다. 다시 열면 같은 내용을 돌려준다. */
     @Transactional
     SolutionView solution(String memberId, UUID sessionId, UUID problemId) {
-        var session = sessions.get(memberId, sessionId);
+        var session = access.lockOwned(memberId, sessionId);
         var problem = problems.findByIdAndSessionIdAndMemberId(problemId, sessionId, memberId)
                 .orElseThrow(AssessmentProblemService::notFound);
         var history = attempts.findByProblemIdOrderByAttemptNo(problemId);

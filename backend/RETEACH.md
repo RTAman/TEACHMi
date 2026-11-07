@@ -2,9 +2,9 @@
 
 오답 이후 보완할 개념을 설명하는 대화를 같은 학습 세션에 저장하고, 완료 후 원래 문항 ID를 C에 돌려줍니다. 재설명마다 고유 ID를 부여해 최초 학습과 발화·도움·최종 설명을 구분합니다.
 
-## C 연결 대기 상태
+## C 연결 상태
 
-현재 저장소에는 C의 문항·답안 구현이 없습니다. C는 `ReteachProblemSource` Spring bean을 구현해야 합니다. 미연결 시 `503 LEARNING_PROBLEM_INTEGRATION_PENDING`을 반환하고 problem 단계와 최초 학습 근거를 보존합니다. 테스트용 C 구현은 src/test에만 있습니다.
+C의 AssessmentReteachSource가 실제 문항·답안을 읽고 최신 오답과 신규 시작의 근거 버전을 확인합니다. C 경로와 기존 B 경로에 공통 적용합니다. 진행 중 재설명과 복귀는 B의 정상적인 버전 증가를 허용합니다. 어댑터 미연결 배포는 여전히 `503 LEARNING_PROBLEM_INTEGRATION_PENDING`을 반환합니다.
 
 `loadWrongAttempt(memberId, sessionId, problemId, attemptId)`는 다음을 확인합니다.
 
