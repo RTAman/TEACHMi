@@ -1,10 +1,7 @@
 package com.teachmi.backend.learning.gemini;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.ObjectProvider;
@@ -20,18 +17,16 @@ import tools.jackson.databind.SerializationFeature;
 public final class GeminiContentGenerator implements LearningContentGenerator, LearningDialogueGenerator, LearningReteachGenerator {
     private static final String PROMPT_VERSION = "teachmi-content-v1";
     private final GeminiSettings settings;
-    private final ObjectProvider<LearningSourceReader> sources;
-    private final GeminiTransport transport;
-    private final GeminiLedger ledger;
+    private final GeminiGenerationService generation;
     private final ObjectMapper json;
 
     GeminiContentGenerator(GeminiSettings settings, ObjectProvider<LearningSourceReader> sources,
                            GeminiTransport transport, GeminiLedger ledger, ObjectMapper json) {
-        this.settings = settings;
-        this.sources = sources;
-        this.transport = transport;
-        this.ledger = ledger;
-        this.json = json;
+        this(new GeminiGenerationService(settings,sources,transport,ledger,json),settings,json);
+    }
+
+    GeminiContentGenerator(GeminiGenerationService generation,GeminiSettings settings,ObjectMapper json) {
+        this.generation=generation;this.settings=settings;this.json=json;
     }
 
     @Override public Summary summarize(LearningContentGenerator.Context context) {
@@ -67,71 +62,9 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
 
     private JsonNode content(LearningContentGenerator.Context context, String kind,
                              LearningDialogueGenerator.Context dialogue, LearningReteachGenerator.Context reteach) {
-        var reader = sources.getIfAvailable();
-        if (reader == null) {
-            throw new LearningException(503, "LEARNING_SOURCE_INTEGRATION_PENDING",
-                    "A의 자료 소유권 검증·원문 조회 연결이 필요합니다.");
-        }
-        if (settings.apiKey().isBlank() || !settings.model().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,99}")) {
-            throw new LearningException(503, "GEMINI_CONFIGURATION_REQUIRED", "Gemini 키와 모델 설정이 필요합니다.");
-        }
-        var raw = reader.readOwned(context.memberId(), context.materialId(), context.conceptId(),
-                context.concept().sourceChunkIds());
-        var chunks = verifySource(context, raw);
-        String request = request(context, kind, chunks, dialogue, reteach);
-        String key = hash((reteach != null ? "teachmi-reteach-v1" : dialogue == null ? PROMPT_VERSION : "teachmi-dialogue-v1")
-                + "\n" + settings.model() + "\n" + request);
-        String saved = ledger.claim(key, context, request.getBytes(StandardCharsets.UTF_8).length);
-        if (saved != null) {
-            return validatePayload(saved, kind, chunks, dialogue);
-        }
-
-        String payload;
-        JsonNode validated;
-        try {
-            payload = extract(transport.generate(request));
-            validated = validatePayload(payload, kind, chunks, dialogue);
-        } catch (GeminiCallFailure ex) {
-            ledger.fail(key, ex.uncertain, ex.retrySeconds, ex.diagnostic);
-            throw new LearningException(ex.status, ex.code, "Gemini 호출을 완료하지 못했습니다.");
-        } catch (RuntimeException ex) {
-            // Invalid/blocked/truncated responses are never silently used or automatically regenerated.
-            ledger.fail(key, false, 0, "INVALID_GEMINI_RESPONSE");
-            throw new LearningException(502, "INVALID_GEMINI_RESPONSE", "Gemini 응답과 출처를 검증하지 못했습니다.");
-        }
-        try {
-            ledger.succeed(key, payload);
-        } catch (RuntimeException ex) {
-            // Keep the lease if DB persistence fails; retrying must not blindly bill another generation.
-            throw new LearningException(503, "AI_GENERATION_UNCERTAIN", "생성 결과 저장 확인이 필요합니다.");
-        }
-        return validated;
-    }
-
-    private List<LearningSourceReader.Chunk> verifySource(LearningContentGenerator.Context context, LearningSourceReader.OwnedSource raw) {
-        if (raw == null || !context.memberId().equals(raw.memberId())
-                || !context.materialId().equals(raw.materialId()) || !context.conceptId().equals(raw.conceptId())) {
-            throw LearningException.notFound();
-        }
-        if (raw.chunks() == null || raw.chunks().isEmpty()) {
-            throw new LearningException(503, "LEARNING_SOURCE_INCOMPLETE", "선택 개념의 원문이 준비되지 않았습니다.");
-        }
-        var ids = new HashSet<String>();
-        long length = 0;
-        for (var chunk : raw.chunks()) {
-            if (chunk == null || chunk.id() == null || chunk.text() == null || chunk.text().isBlank()
-                    || !ids.add(chunk.id())) {
-                throw new LearningException(503, "LEARNING_SOURCE_INCOMPLETE", "원문 조각을 확인할 수 없습니다.");
-            }
-            length += chunk.text().length();
-        }
-        if (!ids.equals(new HashSet<>(context.concept().sourceChunkIds()))) {
-            throw new LearningException(503, "LEARNING_SOURCE_INCOMPLETE", "개념의 출처와 원문 목록이 다릅니다.");
-        }
-        if (length > settings.maxSourceChars()) {
-            throw new LearningException(422, "LEARNING_SOURCE_TOO_LARGE", "선택한 원문의 범위를 줄여 주세요.");
-        }
-        return raw.chunks().stream().sorted(java.util.Comparator.comparing(LearningSourceReader.Chunk::id)).toList();
+        String version=reteach!=null?"teachmi-reteach-v1":dialogue==null?PROMPT_VERSION:"teachmi-dialogue-v1";
+        return generation.legacy(context,version,chunks -> request(context,kind,chunks,dialogue,reteach),
+                payload -> validatePayload(payload,kind,dialogue));
     }
 
     private String request(LearningContentGenerator.Context context, String kind,
@@ -231,28 +164,7 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
                 "required", properties.keySet().stream().sorted().toList(), "additionalProperties", false);
     }
 
-    private String extract(String body) {
-        var root = json.readTree(body);
-        if (root.path("promptFeedback").hasNonNull("blockReason")) {
-            throw new IllegalArgumentException("Blocked");
-        }
-        var candidates = root.path("candidates");
-        if (!candidates.isArray() || candidates.size() != 1
-                || !"STOP".equals(candidates.get(0).path("finishReason").asText())) {
-            throw new IllegalArgumentException("Incomplete candidate");
-        }
-        var parts = candidates.get(0).path("content").path("parts");
-        if (!parts.isArray()) throw new IllegalArgumentException("Missing content");
-        var text = new StringBuilder();
-        for (var part : parts) {
-            if (part.path("thought").asBoolean(false)) continue;
-            if (!part.path("text").isString()) throw new IllegalArgumentException("Unexpected output type");
-            text.append(part.path("text").asText());
-        }
-        return text.toString();
-    }
-
-    private JsonNode validateContent(JsonNode result, String kind, List<LearningSourceReader.Chunk> chunks) {
+    private JsonNode validateContent(JsonNode result, String kind) {
         var fields = new HashSet<String>(List.of("text", "sourceChunkIds", "evidence"));
         if (kind.equals("summary")) fields.addAll(List.of("examples", "keyTerms", "reflectionPrompt"));
         if (kind.equals("dialogue")) fields.add("accepted");
@@ -269,30 +181,6 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
             requireTexts(result.path("keyTerms"));
             requireText(result.path("reflectionPrompt"), 2000);
         }
-        var texts = new HashMap<String, String>();
-        chunks.forEach(chunk -> texts.put(chunk.id(), chunk.text()));
-        var cited = new HashSet<String>();
-        var ids = result.path("sourceChunkIds");
-        if (!ids.isArray() || ids.isEmpty()) throw new IllegalArgumentException("Missing citations");
-        for (var id : ids) {
-            if (!id.isString() || !texts.containsKey(id.asText()) || !cited.add(id.asText())) {
-                throw new IllegalArgumentException("Invalid citation");
-            }
-        }
-        var evidence = result.path("evidence");
-        if (!evidence.isArray() || evidence.isEmpty()) throw new IllegalArgumentException("Missing evidence");
-        var grounded = new HashSet<String>();
-        for (var entry : evidence) {
-            var id = entry.path("sourceChunkId");
-            var quote = entry.path("quote");
-            if (!entry.isObject() || entry.size() != 2 || !id.isString() || !cited.contains(id.asText())
-                    || !quote.isString() || quote.asText().length() < 6
-                    || !texts.get(id.asText()).contains(quote.asText())) {
-                throw new IllegalArgumentException("Invalid evidence quote");
-            }
-            grounded.add(id.asText());
-        }
-        if (!grounded.equals(cited)) throw new IllegalArgumentException("Unsubstantiated citation");
         var clean = json.createObjectNode();
         for (String field : fields) {
             if (!field.equals("evidence")) clean.set(field, result.get(field));
@@ -300,9 +188,8 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
         return clean;
     }
 
-    private JsonNode validatePayload(String payload, String kind, List<LearningSourceReader.Chunk> chunks,
-                                     LearningDialogueGenerator.Context dialogue) {
-        var result = validateContent(json.readTree(payload), kind, chunks);
+    private JsonNode validatePayload(JsonNode payload, String kind, LearningDialogueGenerator.Context dialogue) {
+        var result = validateContent(payload, kind);
         if (dialogue != null && !dialogue.kind().equals("answer") && result.path("accepted").asBoolean()) {
             throw new IllegalArgumentException("Help cannot advance a stage");
         }
@@ -320,12 +207,4 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
         node.forEach(item -> requireText(item, 2000));
     }
 
-    private String hash(String value) {
-        try {
-            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8)));
-        } catch (java.security.NoSuchAlgorithmException ex) {
-            throw new IllegalStateException("SHA-256 unavailable");
-        }
-    }
 }

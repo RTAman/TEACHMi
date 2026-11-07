@@ -2,6 +2,10 @@
 
 Gemini 어댑터는 기존 `LearningContentGenerator`를 구현합니다. 기존 모드 선택·설명 시작 API의 요청과 응답 형식을 사용하고 요약과 첫 질문을 DB에 저장합니다. GET과 성공 요청의 재전송은 저장한 내용을 돌려줍니다.
 
+B와 향후 소비자가 공유할 Java 호출 계약은 [공통 Gemini 포트](COMMON_GEMINI_PORT.md)의 GeminiGenerationPort입니다.
+기존 B 생성기는 같은 실행 엔진·원문/출처 검증·V4 사용량 원장을 사용하며, 기존 프롬프트와 생성 키를 유지합니다.
+C의 ProblemGenerator·AnswerGrader 연결은 이 작업에 포함하지 않습니다.
+
 ## A 원문 연결
 
 A의 `MaterialLearningSources`가 `LearningSourceReader`를 구현합니다. 직접 입력 자료에서 회원의 소유권, 개념과 자료의 관계, 요청한 원문 조각의 소속을 검증한 뒤 실제 텍스트를 반환합니다. 파일 업로드·분석은 후속 작업이며, A의 인증·자료 사용 방법은 [연동 계약](AUTH_MATERIALS.md)을 참고하세요.

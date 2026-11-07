@@ -2,6 +2,8 @@
 
 Java 21, Spring Boot 4.1.2, Spring Data JPA, PostgreSQL 17을 사용합니다. 로컬에서는 각자 PostgreSQL을 띄우고, 세 사람의 코드는 하나의 Spring Boot 서버에서 실행됩니다.
 
+B가 제공하는 [공통 Gemini 호출 포트](COMMON_GEMINI_PORT.md)에 원문 검증·공유 한도·중복 방지와 C 후속 연결의 트랜잭션 규칙을 정리했습니다.
+
 ## 처음 실행하기
 
 JDK 21과 Docker Compose가 필요합니다. Docker Desktop 사용자는 엔진을 먼저 켭니다. 저장소 루트에서 아래 명령을 실행하세요. Gradle은 저장소에 포함된 Wrapper가 내려받습니다.

@@ -32,10 +32,14 @@ public class GeminiLedger implements AutoCloseable {
     }
 
     public String claim(String key, Context context, int inputBytes) {
-        return transaction.execute(status -> claimInside(key, context, inputBytes));
+        return claim(key, context.memberId(), context.sessionId(), inputBytes);
     }
 
-    private String claimInside(String key, Context context, int inputBytes) {
+    String claim(String key, String memberId, UUID sessionId, int inputBytes) {
+        return transaction.execute(status -> claimInside(key, memberId, sessionId, inputBytes));
+    }
+
+    private String claimInside(String key, String memberId, UUID sessionId, int inputBytes) {
         // Serialize project-wide quota reservations across all backend instances sharing this DB.
         jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended('teachmi:gemini:quota',0))");
         var rows = jdbc.queryForList("SELECT *, lease_until > now() AS leased, retry_after > now() AS cooling "
@@ -63,7 +67,7 @@ public class GeminiLedger implements AutoCloseable {
                 SELECT count(*) AS day_count,
                        count(*) FILTER (WHERE member_id=?) AS member_count
                 FROM teachmi.learning_ai_call WHERE attempted_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                """, context.memberId());
+                """, memberId);
         // Include the previous day's last minute at UTC midnight.
         long minute = jdbc.queryForObject(
                 "SELECT count(*) FROM teachmi.learning_ai_call WHERE attempted_at > now()-interval '1 minute'", Long.class);
@@ -79,12 +83,12 @@ public class GeminiLedger implements AutoCloseable {
                 ON CONFLICT (generation_key) DO UPDATE SET state='running',
                     attempts=teachmi.learning_ai_generation.attempts+1,
                     lease_until=now()+interval '120 seconds',updated_at=now()
-                """, key, context.memberId(), context.sessionId());
+                """, key, memberId, sessionId);
         jdbc.update("""
                 INSERT INTO teachmi.learning_ai_call
                     (id,generation_key,member_id,attempted_at,input_bytes,max_output_tokens)
                 VALUES (?,?,?,now(),?,?)
-                """, UUID.randomUUID(), key, context.memberId(), inputBytes, settings.maxOutputTokens());
+                """, UUID.randomUUID(), key, memberId, inputBytes, settings.maxOutputTokens());
         return null;
     }
 
