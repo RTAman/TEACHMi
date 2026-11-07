@@ -139,6 +139,10 @@ public class AssessmentAttemptService {
                 throw new ApiException(409,"IDEMPOTENCY_KEY_REUSED","같은 키에 다른 요청을 보냈습니다.");
             }
             if (attempt.judgement != null) return pending(view(attempt,problem),attempt,problem);
+            // A receipt with no verdict is new remote work, not a historical success replay.
+            // Validate before leaving the transaction so stale retries do not consume AI quota.
+            var locked=access.lockReady(member,sessionId,null);
+            requireGradeable(attempt,problem,locked.version());
         } else {
             attempt=new AssessmentAttempt(problem,prepared.attemptNo(),request.answer(),request.work(),
                     prepared.reteachId(),problem.solutionViewedAt != null,key,prepared.hash());
@@ -153,17 +157,14 @@ public class AssessmentAttemptService {
      */
     @Transactional
     public AttemptView applyGrade(String member, UUID sessionId, UUID attemptId, AnswerGrader.Grade grade) {
-        var locked=access.lockReady(member,sessionId,null);
+        access.lockOwned(member,sessionId);
         var attempt=attempts.findById(attemptId).filter(item -> item.memberId.equals(member)
                 && item.sessionId.equals(sessionId)).orElseThrow(AssessmentProblemService::notFound);
         var problem=problems.findByIdAndSessionIdAndMemberId(attempt.problemId,sessionId,member)
                 .orElseThrow(AssessmentProblemService::notFound);
         if (attempt.judgement != null) return view(attempt,problem);
-        var history=attempts.findByProblemIdOrderByAttemptNo(problem.id);
-        if (!history.getLast().id.equals(attempt.id) || problem.confirmedAt != null
-                || problem.evidenceVersion != locked.version()) {
-            throw new ApiException(409,"ASSESSMENT_EVIDENCE_STALE","채점하는 동안 학습 상태가 바뀌었습니다. 같은 키로 다시 제출하세요.");
-        }
+        var locked=access.lockReady(member,sessionId,null);
+        requireGradeable(attempt,problem,locked.version());
         if (grade == null || grade.judgement() == null
                 || !List.of("correct","wrong","pending_review").contains(grade.judgement())
                 || (grade.reteachFocus() != null && (grade.reteachFocus().isBlank() || grade.reteachFocus().length() > 2000))) {
@@ -178,6 +179,14 @@ public class AssessmentAttemptService {
             problems.saveAndFlush(problem);
         }
         return view(attempt,problem);
+    }
+
+    private void requireGradeable(AssessmentAttempt attempt, AssessmentProblem problem, long evidenceVersion) {
+        var history=attempts.findByProblemIdOrderByAttemptNo(problem.id);
+        if (history.isEmpty() || !history.getLast().id.equals(attempt.id) || problem.confirmedAt != null
+                || problem.evidenceVersion != evidenceVersion) {
+            throw new ApiException(409,"ASSESSMENT_EVIDENCE_STALE","채점하는 동안 학습 상태가 바뀌었습니다. 같은 키로 다시 제출하세요.");
+        }
     }
 
     private static PendingGrade pending(AttemptView done, AssessmentAttempt attempt, AssessmentProblem problem) {

@@ -2,6 +2,7 @@ package com.teachmi.backend.assessment;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import com.teachmi.backend.ai.GeminiGenerationPort;
@@ -95,6 +96,31 @@ class GeminiProblemGeneratorTest {
         var same = problem("같은 문제입니다. 값을 구하세요.", "1");
         assertThatThrownBy(() -> using(new AtomicReference<>(), response(same, same)).generate("member-1", session()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void rejectsExplicitAnswerDisclosureIncludingShortAndFormattedAnswers() {
+        var disclosures=Map.of(
+                "정답은 200만 원입니다. 이 기계의 연간 감가상각비를 구하세요.", "200만 원",
+                "정답: **4**. 두 수의 합을 구하세요.", "4",
+                "정답은 ４입니다. 두 수의 합을 구하세요.", "4",
+                "정답은 4\u200B입니다. 두 수의 합을 구하세요.", "4",
+                "정답은 **-4**입니다. 두 수의 차를 구하세요.", "-4",
+                "The answer is A. Choose the correct option.", "A",
+                "4가 정답입니다. 두 수의 합을 구하세요.", "4");
+        disclosures.forEach((question,answer) -> {
+            var body=response(problem(question,answer),problem("별도의 두 번째 문제입니다. 값을 구하세요.","180만 원"));
+            assertThatThrownBy(() -> using(new AtomicReference<>(),body).generate("member-1",session()))
+                    .as(question).isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("정답");
+        });
+    }
+
+    @Test
+    void allowsAGivenNumberAndAQuestionAskingForTheAnswer() {
+        var body=response(problem("가로가 4이고 세로가 1인 직사각형의 넓이를 구하세요.","4"),
+                problem("6과 2를 나눌 때 정답은 무엇인가요?", "3"));
+        assertThat(using(new AtomicReference<>(),body).generate("member-1",session())).hasSize(2);
     }
 
     @Test

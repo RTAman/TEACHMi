@@ -15,7 +15,7 @@ import tools.jackson.databind.ObjectMapper;
 class GeminiAnswerGrader implements RemoteAnswerGrader {
     static final String OPERATION = "assessment/grade";
     // 판정 규칙·스키마를 바꾸면 올린다.
-    static final String PROMPT_VERSION = "v1";
+    static final String PROMPT_VERSION = "v2";
     /** 보완 개념에 정답이 섞여 나오면 대신 쓰는 문장. 재설명과 리포트에 정답이 새지 않게 한다. */
     static final String SAFE_FOCUS = "문제에 적용한 핵심 원리와 그 이유를 다시 설명해 보세요.";
 
@@ -84,8 +84,9 @@ class GeminiAnswerGrader implements RemoteAnswerGrader {
             return new AnswerGrader.Grade(judgement, null);
         }
         var focus = response.path("reteachFocus").asText("").strip();
-        String answer = expectedAnswer.replaceAll("\\s", "");
-        boolean leaks = answer.length() >= 2 && focus.replaceAll("\\s", "").contains(answer);
+        String answer = AnswerExposure.normalize(expectedAnswer);
+        // Single-character numbers, letters and Korean answers need the same protection.
+        boolean leaks = !answer.isEmpty() && AnswerExposure.normalize(focus).contains(answer);
         return new AnswerGrader.Grade(judgement, focus.isEmpty() || leaks ? SAFE_FOCUS : focus);
     }
 }

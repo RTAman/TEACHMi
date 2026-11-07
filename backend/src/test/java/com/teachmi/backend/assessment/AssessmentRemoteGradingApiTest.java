@@ -2,6 +2,10 @@ package com.teachmi.backend.assessment;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import com.teachmi.backend.auth.AuthFilter;
@@ -115,6 +119,91 @@ class AssessmentRemoteGradingApiTest {
         var replay = submit("k1", "200만원");
         assertThat(replay.getStatus()).isEqualTo(201);
         assertThat(body(replay).path("judgement").asText()).isEqualTo("correct");
+    }
+
+    @Test
+    void anAbandonedPendingRetryIsRejectedWithoutCallingTheGrader() throws Exception {
+        failFirstGrading();
+        jdbc.update("UPDATE teachmi.learning_session SET status='abandoned',version=version+1 WHERE id=?",session);
+        assertPendingRetryDoesNotCallGrader(null);
+    }
+
+    @Test
+    void anUnreadyPendingRetryIsRejectedWithoutCallingTheGrader() throws Exception {
+        failFirstGrading();
+        jdbc.update("UPDATE teachmi.learning_session SET stage='chat',version=version+1 WHERE id=?",session);
+        assertPendingRetryDoesNotCallGrader(null);
+    }
+
+    @Test
+    void aStalePendingRetryIsRejectedWithoutCallingTheGrader() throws Exception {
+        failFirstGrading();
+        jdbc.update("UPDATE teachmi.learning_session SET version=version+1 WHERE id=?",session);
+        assertPendingRetryDoesNotCallGrader("ASSESSMENT_EVIDENCE_STALE");
+    }
+
+    @Test
+    void aHistoricalGradedReplayRemainsAvailableAfterSessionReplacement() throws Exception {
+        var saved=submit("k1","200만원");
+        assertThat(saved.getStatus()).isEqualTo(201);
+        jdbc.update("UPDATE teachmi.learning_session SET status='abandoned',version=version+1 WHERE id=?",session);
+        BEHAVIOR.set(input -> { throw new AssertionError("A historical replay must not call AI"); });
+        var replay=submit("k1","200만원");
+        assertThat(replay.getStatus()).isEqualTo(201);
+        assertThat(body(replay)).isEqualTo(body(saved));
+        code(submit("k1","changed answer"),409,"IDEMPOTENCY_KEY_REUSED");
+    }
+
+    @Test
+    void concurrentSameKeyRequestsReturnTheSavedGradeEvenAfterSessionReplacement() throws Exception {
+        var reached=new CountDownLatch(1);
+        var release=new CountDownLatch(1);
+        var calls=new AtomicInteger();
+        BEHAVIOR.set(input -> {
+            if (calls.incrementAndGet()==1) {
+                reached.countDown();
+                try {
+                    if (!release.await(10,TimeUnit.SECONDS)) throw new AssertionError("Grading was not released");
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+            }
+            return new AnswerGrader.Grade("correct",null);
+        });
+        try (var executor=Executors.newVirtualThreadPerTaskExecutor()) {
+            var waiting=executor.submit(() -> submit("concurrent","200만원"));
+            try {
+                assertThat(reached.await(10,TimeUnit.SECONDS)).isTrue();
+                var saved=submit("concurrent","200만원");
+                assertThat(saved.getStatus()).isEqualTo(201);
+                jdbc.update("UPDATE teachmi.learning_session SET status='abandoned',version=version+1 WHERE id=?",session);
+                release.countDown();
+                var replay=waiting.get(10,TimeUnit.SECONDS);
+                assertThat(replay.getStatus()).isEqualTo(201);
+                assertThat(body(replay)).isEqualTo(body(saved));
+                assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_attempt WHERE problem_id=?",
+                        Long.class,first)).isEqualTo(1);
+            } finally {
+                release.countDown();
+            }
+        }
+    }
+
+    private void failFirstGrading() throws Exception {
+        BEHAVIOR.set(input -> { throw new LearningException(502,"INVALID_AI_RESPONSE","invalid response"); });
+        assertThat(submit("pending","200만원").getStatus()).isEqualTo(502);
+    }
+
+    private void assertPendingRetryDoesNotCallGrader(String expectedCode) throws Exception {
+        var calls=new AtomicInteger();
+        BEHAVIOR.set(input -> { calls.incrementAndGet(); return new AnswerGrader.Grade("correct",null); });
+        var rejected=submit("pending","200만원");
+        assertThat(rejected.getStatus()).isEqualTo(409);
+        if (expectedCode != null) assertThat(body(rejected).path("code").asText()).isEqualTo(expectedCode);
+        assertThat(calls.get()).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_attempt WHERE problem_id=? AND judgement IS NULL",
+                Long.class,first)).isEqualTo(1);
     }
 
     @Test

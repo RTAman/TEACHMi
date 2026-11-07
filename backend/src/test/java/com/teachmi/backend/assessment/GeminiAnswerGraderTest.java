@@ -86,6 +86,25 @@ class GeminiAnswerGraderTest {
     }
 
     @Test
+    void aOneCharacterAnswerIsRedactedEvenWithUnicodeFormatting() {
+        var grader=new GeminiAnswerGrader(null,json);
+        for (var answer : List.of("4","A","가")) {
+            var focus="정답은 "+answer+"입니다. 다시 설명해 보세요.";
+            assertThat(grader.validate(json.readTree(response("wrong",focus)),answer).reteachFocus())
+                    .isEqualTo(GeminiAnswerGrader.SAFE_FOCUS);
+        }
+        assertThat(grader.validate(json.readTree(response("wrong","정답은 ４\u200B입니다.")),"4").reteachFocus())
+                .isEqualTo(GeminiAnswerGrader.SAFE_FOCUS);
+    }
+
+    @Test
+    void aSafeFocusIsPreservedForAOneCharacterAnswer() {
+        var grader=new GeminiAnswerGrader(null,json);
+        var focus="공식을 적용한 이유를 다시 생각해 보세요.";
+        assertThat(grader.validate(json.readTree(response("wrong",focus)),"4").reteachFocus()).isEqualTo(focus);
+    }
+
+    @Test
     void pendingReviewHasNoFocus() {
         var grade = grade(new AtomicReference<>(), response("pending_review", "무시된다"));
         assertThat(grade.judgement()).isEqualTo("pending_review");

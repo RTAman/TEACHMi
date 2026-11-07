@@ -24,7 +24,7 @@ import tools.jackson.databind.ObjectMapper;
 class GeminiProblemGenerator implements ProblemGenerator {
     static final String OPERATION = "assessment/problems";
     // 프롬프트·스키마·검증 규칙을 바꾸면 올린다. 같은 버전의 이전 결과가 재사용되지 않게 한다.
-    static final String PROMPT_VERSION = "v1";
+    static final String PROMPT_VERSION = "v2";
 
     private static final String INSTRUCTION = """
             학생이 AI 학생에게 개념을 설명한 직후 혼자 풀 응용문제 2개를 한국어로 만든다.
@@ -112,6 +112,9 @@ class GeminiProblemGenerator implements ProblemGenerator {
         for (var item : items) {
             var draft = new Draft(field(item, "question"), field(item, "changedConditions"),
                     field(item, "expectedAnswer"), field(item, "solution"), field(item, "gradingCriteria"), sources);
+            if (AnswerExposure.questionRevealsAnswer(draft.question(),draft.expectedAnswer())) {
+                throw new IllegalArgumentException("문제에 정답이 공개되어 있습니다.");
+            }
             if (!questions.add(draft.question())) {
                 // 같은 문제가 두 번 나오면 두 번째 문항으로 독립 적용을 확인할 수 없다.
                 throw new IllegalArgumentException("문항이 중복됩니다.");
