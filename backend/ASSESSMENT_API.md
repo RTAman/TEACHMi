@@ -71,3 +71,16 @@ ASSESSMENT_DEMO_ENABLED=true에서만 FixedAnswerGrader가 금액(원·만원)�
 미로그인 401, CSRF 누락·오류 403, 타인/없는/잘못된 ID 404,
 입력·요청 키 오류 422, JSON 파싱 오류 400입니다. 오류 본문은 code·message이며 비공개 답안을 담지 않습니다.
 정상 결과는 기존 V9 테이블에 저장합니다. 마이그레이션 추가·기존 SQL 변경은 없습니다.
+
+## 재설명·해설 연결
+
+POST /sessions/{sessionId}/problems/{problemId}/reteach는 attemptId·expectedVersion과 요청 키로 B 재설명을 시작합니다.
+기존 B /sessions/{sessionId}/reteach 경로도 같은 C 연결 지점에서 신규 시작의 근거 버전을 검증합니다.
+진행 중인 재설명 재시도·대화·복귀 검증에는 시작 당시 문항 버전과 달라진 B 버전을 잘못 비교하지 않습니다.
+새 답안·해설 요청은 C 기록과 복귀 표시를 읽기 전에 B 회원 → 세션 잠금을 취득합니다.
+재설명 복귀 소비와 재제출 저장을 같은 트랜잭션으로 처리하며, 동시 같은 키는 동일한 시도와 응답으로 수렴합니다.
+다른 키의 중복 재제출은 거절하고 첫 독립 답안은 유지합니다.
+
+POST /sessions/{sessionId}/problems/{problemId}/solution은 채점된 문항의 정답·해설을 공개하고 열람 시점과 문항 확정을 저장합니다.
+동시 요청도 최초 열람 시점을 유지하며, 이후 새 답안·재설명은 허용하지 않습니다.
+기존 V1~V9 SQL과 B HTTP 계약은 유지합니다.

@@ -40,7 +40,7 @@ public class AssessmentAttemptService {
         if (key == null || key.isBlank() || key.length() > 128 || key.indexOf('\0') >= 0) {
             throw new ApiException(422,"INVALID_IDEMPOTENCY_KEY","Idempotency-Key는 1~128자로 전달해야 합니다.");
         }
-        var view=sessions.get(member,sessionId); // Ownership even for a historical replay.
+        var view=access.lockOwned(member,sessionId); // Serialize before reading receipts or consuming a return.
         var problem=problems.findByIdAndSessionIdAndMemberId(problemId,sessionId,member)
                 .orElseThrow(AssessmentProblemService::notFound);
         var hash=hash(json.writeValueAsString(new Fingerprint(sessionId,problemId,request)));
