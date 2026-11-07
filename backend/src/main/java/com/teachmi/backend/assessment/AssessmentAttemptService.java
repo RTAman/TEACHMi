@@ -25,12 +25,13 @@ public class AssessmentAttemptService {
     private final AssessmentAttemptRepository attempts;
     private final ObjectProvider<AnswerGrader> graders;
     private final ObjectMapper json;
+    private final ReteachReturns returns;
 
     AssessmentAttemptService(LearningSessionService sessions, LearningAssessmentAccess access,
-            AssessmentProblemRepository problems, AssessmentAttemptRepository attempts,
-            ObjectProvider<AnswerGrader> graders, ObjectMapper json) {
+                             AssessmentProblemRepository problems, AssessmentAttemptRepository attempts,
+                             ObjectProvider<AnswerGrader> graders, ObjectMapper json, ReteachReturns returns) {
         this.sessions=sessions; this.access=access; this.problems=problems; this.attempts=attempts;
-        this.graders=graders; this.json=json;
+        this.graders=graders; this.json=json; this.returns=returns;
     }
     private record Fingerprint(UUID sessionId, UUID problemId, SubmitRequest request) {}
 
@@ -39,19 +40,32 @@ public class AssessmentAttemptService {
         if (key == null || key.isBlank() || key.length() > 128 || key.indexOf('\0') >= 0) {
             throw new ApiException(422,"INVALID_IDEMPOTENCY_KEY","Idempotency-Key는 1~128자로 전달해야 합니다.");
         }
-        sessions.get(member,sessionId); // Ownership even for a historical replay.
+        var view=access.lockOwned(member,sessionId); // Serialize before reading receipts or consuming a return.
         var problem=problems.findByIdAndSessionIdAndMemberId(problemId,sessionId,member)
                 .orElseThrow(AssessmentProblemService::notFound);
         var hash=hash(json.writeValueAsString(new Fingerprint(sessionId,problemId,request)));
         var previous=attempts.findByMemberIdAndRequestKey(member,key);
         if (previous.isPresent()) return replay(previous.get(),hash,problem);
 
+        // 재설명에서 이 문항으로 돌아왔다면 lockReady 전에 B의 복귀 표시를 먼저 소비한다.
+        var returned=returns.pendingFor(view,problemId);
+        if (returned != null) returns.acknowledge(member,sessionId,returned,view.version());
         var locked=access.lockReady(member,sessionId,null);
         previous=attempts.findByMemberIdAndRequestKey(member,key);
         if (previous.isPresent()) return replay(previous.get(),hash,problem);
-        if (!attempts.findByProblemIdOrderByAttemptNo(problemId).isEmpty() || problem.confirmedAt != null) {
-            throw new ApiException(409,"FIRST_ATTEMPT_ALREADY_SUBMITTED","첫 답안은 보존됩니다. 새 답안 제출은 재설명 후 연결됩니다.");
+        var history=attempts.findByProblemIdOrderByAttemptNo(problemId);
+        UUID reteachId=null;
+        if (!history.isEmpty() || problem.confirmedAt != null) {
+            // 이미 푼 문항은 마지막 오답에서 재설명을 마치고 돌아온 경우에만 다시 제출할 수 있다. 첫 시도는 그대로 남는다.
+            var last=history.isEmpty() ? null : history.getLast();
+            boolean retry=returned != null && last != null && returned.originAttemptId().equals(last.id.toString())
+                    && "wrong".equals(last.judgement) && problem.confirmedAt == null && problem.solutionViewedAt == null;
+            if (!retry) {
+                throw new ApiException(409,"FIRST_ATTEMPT_ALREADY_SUBMITTED","첫 답안은 보존됩니다. 새 답안 제출은 재설명 후 연결됩니다.");
+            }
+            reteachId=returned.reteachId();
         }
+        if (returned != null) returns.rebaseline(member,sessionId,locked.version());
         if (problem.evidenceVersion != locked.version()) {
             throw new ApiException(409,"ASSESSMENT_EVIDENCE_STALE","문항이 사용한 학습 근거 버전이 변경됐습니다.");
         }
@@ -75,7 +89,7 @@ public class AssessmentAttemptService {
                 || (grade.reteachFocus() != null && (grade.reteachFocus().isBlank() || grade.reteachFocus().length() > 2000))) {
             throw new ApiException(502,"INVALID_ASSESSMENT_GRADE","채점 결과를 확인할 수 없습니다.");
         }
-        var attempt=new AssessmentAttempt(problem,1,request.answer(),request.work(),null,
+        var attempt=new AssessmentAttempt(problem,history.size()+1,request.answer(),request.work(),reteachId,
                 problem.solutionViewedAt != null,key,hash);
         attempt.judgement=grade.judgement();
         attempt.reteachFocus=grade.reteachFocus();

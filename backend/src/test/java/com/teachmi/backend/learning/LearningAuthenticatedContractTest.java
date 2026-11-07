@@ -113,10 +113,10 @@ class LearningAuthenticatedContractTest {
         var restored = b(get("/api/v1/sessions/active").cookie(member.cookie()), 200, true);
         assertThat(restored.path("sessionId").asText()).isEqualTo(id);
         assertThat(restored.path("messages")).isEqualTo(state.path("messages"));
-        // C still has no production problem source; A's integration must not fake its completion.
-        var pending = write(post(path(id) + "/reteach"), "reteach", Map.of("problemId", "p01", "attemptId", "a01",
-                "expectedVersion", state.path("version").asLong()), 503);
-        assertThat(pending.path("code").asText()).isEqualTo("LEARNING_PROBLEM_INTEGRATION_PENDING");
+        // C의 실제 문항 연결(AssessmentReteachSource)이 생겼으므로, C에 없는 문항으로는 재설명을 시작할 수 없다.
+        var missing = write(post(path(id) + "/reteach"), "reteach", Map.of("problemId", "p01", "attemptId", "a01",
+                "expectedVersion", state.path("version").asLong()), 404);
+        assertThat(missing.path("code").asText()).isEqualTo("NOT_FOUND");
     }
 
     @Test void expiredACookiesCannotReadBSessionState() throws Exception {
