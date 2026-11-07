@@ -230,7 +230,7 @@ class AssessmentAttemptApiTest {
     @Test void pendingReviewIsSavedWithoutBecomingWrongOrConfirmingTheProblem() {
         var result=direct(using(input -> new AnswerGrader.Grade("pending_review",null)),"review");
         assertThat(result.judgement()).isEqualTo("pending_review");
-        assertThat(result.availableActions()).containsExactly("wait_review");
+        assertThat(result.availableActions()).containsExactly("next_problem");
         assertThat(problems.findById(first).orElseThrow().confirmedAt).isNull();
         var saved=attempts.findByMemberIdAndRequestKey(member,"review").orElseThrow();
         assertThat(IndependentApplication.of(List.of(List.of(new AttemptFact(saved.attemptNo,saved.judgement,null,false)))).pendingReview()).isEqualTo(1);

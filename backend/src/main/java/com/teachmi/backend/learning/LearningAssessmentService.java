@@ -8,6 +8,7 @@ import jakarta.validation.constraints.Size;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.validation.annotation.Validated;
 import tools.jackson.databind.ObjectMapper;
@@ -39,26 +40,41 @@ public class LearningAssessmentService {
     @Transactional
     public SessionView publishReport(@NotBlank @Size(max = 128) String memberId, @NotNull UUID sessionId,
             String key, @NotNull @Valid AssessmentTransitionRequest request, @NotNull Persistence persistence) {
-        return transition(memberId, sessionId, key, request, persistence, false);
+        return transition(memberId, sessionId, key, request, persistence, false, true);
     }
 
     @Transactional
     public SessionView completeLearning(@NotBlank @Size(max = 128) String memberId, @NotNull UUID sessionId,
             String key, @NotNull @Valid AssessmentTransitionRequest request, @NotNull Persistence persistence) {
-        return transition(memberId, sessionId, key, request, persistence, true);
+        return transition(memberId, sessionId, key, request, persistence, true, true);
+    }
+
+    /** LearningCommands owns the external command fingerprint and success receipt in this transaction. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public SessionView publishPreparedReport(String memberId, UUID sessionId,
+            @NotNull @Valid AssessmentTransitionRequest request, @NotNull Persistence persistence) {
+        return transition(memberId, sessionId, null, request, persistence, false, false);
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public SessionView completePreparedLearning(String memberId, UUID sessionId,
+            @NotNull @Valid AssessmentTransitionRequest request, @NotNull Persistence persistence) {
+        return transition(memberId, sessionId, null, request, persistence, true, false);
     }
 
     private SessionView transition(String member, UUID id, String key, AssessmentTransitionRequest request,
-            Persistence persistence, boolean complete) {
-        access.validateKey(key);
+            Persistence persistence, boolean complete, boolean ownReceipt) {
+        if (ownReceipt) access.validateKey(key);
         if (TransactionSynchronizationManager.isCurrentTransactionReadOnly()) {
             throw new LearningException(409, "WRITABLE_TRANSACTION_REQUIRED", "상태 전환에는 쓰기 트랜잭션이 필요합니다.");
         }
         access.lockMember(member);
         var session = sessions.lockOwned(id, member).orElseThrow(LearningException::notFound);
         String body = json.writeValueAsString(new Fingerprint(complete ? "assessment/complete" : "assessment/report-ready", id, request));
-        var replay = access.replay(member, key, body);
-        if (replay.isPresent()) return replay.get();
+        if (ownReceipt) {
+            var replay = access.replay(member, key, body);
+            if (replay.isPresent()) return replay.get();
+        }
         verifySession(session, request, complete);
         requireFinalExplanation(session);
         ReportLink previous = null;
@@ -102,7 +118,7 @@ public class LearningAssessmentService {
         session.touch();
         sessions.flush();
         var result = access.view(session);
-        access.remember(member, key, body, result);
+        if (ownReceipt) access.remember(member, key, body, result);
         return result;
     }
 

@@ -3,6 +3,7 @@ package com.teachmi.backend.assessment;
 import java.util.UUID;
 import com.teachmi.backend.learning.LearningException;
 import com.teachmi.backend.learning.ReteachProblemSource;
+import com.teachmi.backend.learning.LearningAssessmentAccess;
 import org.springframework.stereotype.Component;
 
 /**
@@ -13,10 +14,13 @@ import org.springframework.stereotype.Component;
 class AssessmentReteachSource implements ReteachProblemSource {
     private final AssessmentProblemRepository problems;
     private final AssessmentAttemptRepository attempts;
+    private final LearningAssessmentAccess access;
 
-    AssessmentReteachSource(AssessmentProblemRepository problems, AssessmentAttemptRepository attempts) {
+    AssessmentReteachSource(AssessmentProblemRepository problems, AssessmentAttemptRepository attempts,
+                            LearningAssessmentAccess access) {
         this.problems = problems;
         this.attempts = attempts;
+        this.access = access;
     }
 
     @Override
@@ -26,6 +30,7 @@ class AssessmentReteachSource implements ReteachProblemSource {
         var history = attempts.findByProblemIdOrderByAttemptNo(problem.id);
         var attempt = history.stream().filter(item -> item.id.toString().equals(attemptId)).findFirst()
                 .orElseThrow(LearningException::notFound);
+        access.verifyFreshProblemEvidence(memberId, sessionId, problem.evidenceVersion);
         if (problem.solutionViewedAt != null) {
             throw new LearningException(409, "SOLUTION_ALREADY_VIEWED", "해설을 본 문항은 다시 설명할 수 없습니다.");
         }
