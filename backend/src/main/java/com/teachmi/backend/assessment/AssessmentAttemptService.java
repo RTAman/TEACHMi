@@ -35,8 +35,19 @@ public class AssessmentAttemptService {
     }
     private record Fingerprint(UUID sessionId, UUID problemId, SubmitRequest request) {}
 
-    @Transactional
-    public AttemptView submit(String member, UUID sessionId, UUID problemId, String key, SubmitRequest request) {
+    /** 잠금·소유권·단계·순서 검사를 통과한 제출. previous가 있으면 같은 키의 재전송이다. */
+    private record Prepared(AssessmentProblem problem, String hash, AssessmentAttempt previous, int attemptNo,
+                            UUID reteachId) {}
+
+    /**
+     * 원격 채점(Gemini)의 1단계 결과. done이 있으면 이미 채점된 재전송이고,
+     * 없으면 attemptId의 저장된 답안을 트랜잭션 밖에서 채점해야 한다.
+     */
+    record PendingGrade(AttemptView done, UUID attemptId, String question, String expectedAnswer, String solution,
+                        String gradingCriteria, String sourceChunkIds, String answer, String work) {}
+
+    /** 로컬 채점과 원격 채점이 같이 쓰는 검사. 호출한 쪽의 트랜잭션 안에서 실행된다. */
+    private Prepared prepare(String member, UUID sessionId, UUID problemId, String key, SubmitRequest request) {
         if (key == null || key.isBlank() || key.length() > 128 || key.indexOf('\0') >= 0) {
             throw new ApiException(422,"INVALID_IDEMPOTENCY_KEY","Idempotency-Key는 1~128자로 전달해야 합니다.");
         }
@@ -45,14 +56,14 @@ public class AssessmentAttemptService {
                 .orElseThrow(AssessmentProblemService::notFound);
         var hash=hash(json.writeValueAsString(new Fingerprint(sessionId,problemId,request)));
         var previous=attempts.findByMemberIdAndRequestKey(member,key);
-        if (previous.isPresent()) return replay(previous.get(),hash,problem);
+        if (previous.isPresent()) return new Prepared(problem,hash,previous.get(),0,null);
 
         // 재설명에서 이 문항으로 돌아왔다면 lockReady 전에 B의 복귀 표시를 먼저 소비한다.
         var returned=returns.pendingFor(view,problemId);
         if (returned != null) returns.acknowledge(member,sessionId,returned,view.version());
         var locked=access.lockReady(member,sessionId,null);
         previous=attempts.findByMemberIdAndRequestKey(member,key);
-        if (previous.isPresent()) return replay(previous.get(),hash,problem);
+        if (previous.isPresent()) return new Prepared(problem,hash,previous.get(),0,null);
         var history=attempts.findByProblemIdOrderByAttemptNo(problemId);
         UUID reteachId=null;
         if (!history.isEmpty() || problem.confirmedAt != null) {
@@ -74,6 +85,17 @@ public class AssessmentAttemptService {
                 && !AssessmentProgress.finished(p, attempts.findByProblemIdOrderByAttemptNo(p.id)))) {
             throw new ApiException(409,"PREVIOUS_PROBLEM_REQUIRED","앞 문항을 먼저 완료하세요.");
         }
+        return new Prepared(problem,hash,null,history.size()+1,reteachId);
+    }
+
+    @Transactional
+    public AttemptView submit(String member, UUID sessionId, UUID problemId, String key, SubmitRequest request) {
+        var prepared=prepare(member,sessionId,problemId,key,request);
+        var problem=prepared.problem();
+        var hash=prepared.hash();
+        if (prepared.previous() != null) return replay(prepared.previous(),hash,problem);
+        var history=attempts.findByProblemIdOrderByAttemptNo(problemId);
+        UUID reteachId=prepared.reteachId();
         var grader=graders.getIfAvailable();
         if (grader == null) throw new ApiException(503,"ASSESSMENT_GRADING_PENDING","실제 답·풀이 채점기 연결이 필요합니다.");
         AnswerGrader.Grade grade;
@@ -101,6 +123,66 @@ public class AssessmentAttemptService {
             problems.saveAndFlush(problem);
         }
         return view(attempt,problem);
+    }
+
+    /**
+     * 원격 채점 1단계: 답안을 판정 없이(judgement=NULL) 저장하고 커밋한다. 같은 키의 재전송이면 저장된 답안을 다시 채점한다.
+     * AI 호출은 이 트랜잭션 안에서 하지 않는다.
+     */
+    @Transactional
+    public PendingGrade recordPending(String member, UUID sessionId, UUID problemId, String key, SubmitRequest request) {
+        var prepared=prepare(member,sessionId,problemId,key,request);
+        var problem=prepared.problem();
+        var attempt=prepared.previous();
+        if (attempt != null) {
+            if (!attempt.requestHash.equals(prepared.hash())) {
+                throw new ApiException(409,"IDEMPOTENCY_KEY_REUSED","같은 키에 다른 요청을 보냈습니다.");
+            }
+            if (attempt.judgement != null) return pending(view(attempt,problem),attempt,problem);
+        } else {
+            attempt=new AssessmentAttempt(problem,prepared.attemptNo(),request.answer(),request.work(),
+                    prepared.reteachId(),problem.solutionViewedAt != null,key,prepared.hash());
+            attempts.saveAndFlush(attempt);
+        }
+        return pending(null,attempt,problem);
+    }
+
+    /**
+     * 원격 채점 3단계: 다시 잠그고, 채점하는 사이에 학습 상태·근거·문항 기록이 바뀌지 않았을 때만 판정을 저장한다.
+     * 거절되면 답안은 판정 없이 남고, 같은 키로 다시 보내면 다시 채점한다.
+     */
+    @Transactional
+    public AttemptView applyGrade(String member, UUID sessionId, UUID attemptId, AnswerGrader.Grade grade) {
+        var locked=access.lockReady(member,sessionId,null);
+        var attempt=attempts.findById(attemptId).filter(item -> item.memberId.equals(member)
+                && item.sessionId.equals(sessionId)).orElseThrow(AssessmentProblemService::notFound);
+        var problem=problems.findByIdAndSessionIdAndMemberId(attempt.problemId,sessionId,member)
+                .orElseThrow(AssessmentProblemService::notFound);
+        if (attempt.judgement != null) return view(attempt,problem);
+        var history=attempts.findByProblemIdOrderByAttemptNo(problem.id);
+        if (!history.getLast().id.equals(attempt.id) || problem.confirmedAt != null
+                || problem.evidenceVersion != locked.version()) {
+            throw new ApiException(409,"ASSESSMENT_EVIDENCE_STALE","채점하는 동안 학습 상태가 바뀌었습니다. 같은 키로 다시 제출하세요.");
+        }
+        if (grade == null || grade.judgement() == null
+                || !List.of("correct","wrong","pending_review").contains(grade.judgement())
+                || (grade.reteachFocus() != null && (grade.reteachFocus().isBlank() || grade.reteachFocus().length() > 2000))) {
+            throw new ApiException(502,"INVALID_ASSESSMENT_GRADE","채점 결과를 확인할 수 없습니다.");
+        }
+        attempt.judgement=grade.judgement();
+        attempt.reteachFocus=grade.reteachFocus();
+        attempt.gradedAt=Instant.now().truncatedTo(ChronoUnit.MICROS);
+        attempts.saveAndFlush(attempt);
+        if (grade.judgement().equals("correct")) {
+            problem.confirmedAt=attempt.gradedAt;
+            problems.saveAndFlush(problem);
+        }
+        return view(attempt,problem);
+    }
+
+    private static PendingGrade pending(AttemptView done, AssessmentAttempt attempt, AssessmentProblem problem) {
+        return new PendingGrade(done,attempt.id,problem.question,problem.expectedAnswer,problem.solution,
+                problem.gradingCriteria,problem.sourceChunkIds,attempt.answer,attempt.work);
     }
 
     private AttemptView replay(AssessmentAttempt previous, String hash, AssessmentProblem problem) {

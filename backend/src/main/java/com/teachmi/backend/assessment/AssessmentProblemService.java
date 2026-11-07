@@ -38,7 +38,7 @@ class AssessmentProblemService {
             throw new ApiException(503, "ASSESSMENT_GENERATION_PENDING", "실제 원문 기반 문제 생성기 연결이 필요합니다.");
         }
         // Generation stays outside DB locks. The current implementation is explicitly demo-only.
-        var drafts = generator.generate(session);
+        var drafts = generator.generate(memberId, session);
         if (drafts == null || drafts.size() != 2 || drafts.stream().anyMatch(this::invalid)) {
             throw new ApiException(502, "INVALID_PROBLEM_SET", "문항을 만들지 못했습니다. 다시 시도하세요.");
         }
@@ -49,9 +49,9 @@ class AssessmentProblemService {
             var created = new ArrayList<AssessmentProblem>();
             for (int index = 0; index < drafts.size(); index++) {
                 var draft = drafts.get(index);
-                // A fixed demo is not grounded in the lecture: never fabricate a source association.
+                // 원문에 근거하지 않은 임시 문항은 빈 배열을 저장한다. 출처를 지어내지 않는다.
                 created.add(new AssessmentProblem(sessionId, memberId, index + 1, draft.question(),
-                        draft.changedConditions(), "[]", draft.expectedAnswer(), draft.solution(),
+                        draft.changedConditions(), draft.sourcesJson(), draft.expectedAnswer(), draft.solution(),
                         draft.gradingCriteria(), session.version()));
             }
             problems.saveAllAndFlush(created);
