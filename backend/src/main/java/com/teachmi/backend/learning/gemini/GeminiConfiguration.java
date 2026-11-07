@@ -8,6 +8,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import com.teachmi.backend.learning.LearningSourceReader;
+import com.teachmi.backend.ai.GeminiGenerationPort;
+import com.teachmi.backend.learning.LearningSessionService;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
@@ -26,9 +28,16 @@ public class GeminiConfiguration {
     @Bean(destroyMethod = "close") GeminiLedger geminiLedger(DataSourceProperties database, GeminiSettings settings) {
         return new GeminiLedger(database, settings);
     }
-    @Bean GeminiContentGenerator geminiContentGenerator(GeminiSettings settings,
+    @Bean GeminiGenerationService geminiGenerationService(GeminiSettings settings,
             ObjectProvider<LearningSourceReader> sources, GeminiTransport transport,
-            GeminiLedger ledger, ObjectMapper json) {
-        return new GeminiContentGenerator(settings, sources, transport, ledger, json);
+            GeminiLedger ledger, ObjectMapper json, ObjectProvider<LearningSessionService> sessions) {
+        return new GeminiGenerationService(settings, sources, transport, ledger, json, sessions);
+    }
+    @Bean @ConditionalOnMissingBean(GeminiGenerationPort.class)
+    GeminiGenerationPort geminiGenerationPort(GeminiGenerationService service) {
+        return new GeminiPortAdapter(service);
+    }
+    @Bean GeminiContentGenerator geminiContentGenerator(GeminiGenerationService service, GeminiSettings settings, ObjectMapper json) {
+        return new GeminiContentGenerator(service, settings, json);
     }
 }
