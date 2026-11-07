@@ -22,6 +22,7 @@ import com.teachmi.backend.learning.LearningEvidenceView;
 import com.teachmi.backend.learning.LearningException;
 import com.teachmi.backend.learning.LearningMessageView;
 import com.teachmi.backend.learning.LearningSessionService;
+import com.teachmi.backend.learning.LearningCommands;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
@@ -38,10 +39,12 @@ class AssessmentReportService {
     private final AssessmentAttemptRepository attempts;
     private final AssessmentReportRepository reports;
     private final ObjectMapper json;
+    private final LearningCommands commands;
 
     AssessmentReportService(LearningSessionService sessions, LearningEvidenceService evidence,
                             LearningAssessmentService transitions, AssessmentProblemRepository problems,
-                            AssessmentAttemptRepository attempts, AssessmentReportRepository reports, ObjectMapper json) {
+                            AssessmentAttemptRepository attempts, AssessmentReportRepository reports, ObjectMapper json,
+                            LearningCommands commands) {
         this.sessions = sessions;
         this.evidence = evidence;
         this.transitions = transitions;
@@ -49,15 +52,39 @@ class AssessmentReportService {
         this.attempts = attempts;
         this.reports = reports;
         this.json = json;
+        this.commands = commands;
     }
 
     /** 모든 문항을 마친 학습의 리포트를 한 번만 만든다. 이미 있으면 저장된 리포트를 그대로 돌려준다. */
     ReportView publish(String memberId, UUID sessionId, String key) {
+        commands.validateKey(key);
         sessions.get(memberId, sessionId);
-        var existing = reports.findBySessionIdAndMemberId(sessionId, memberId);
-        if (existing.isPresent()) {
-            return view(existing.get());
+        var prepared = prepareIfAbsent(memberId, sessionId);
+        return commands.execute(memberId,sessionId,key,"c/report/publish","",ReportView.class, locked -> {
+            var existing=reports.findBySessionIdAndMemberId(sessionId,memberId);
+            if (existing.isPresent()) return view(existing.get());
+            if (prepared == null) throw notReady();
+            if (locked.version() != prepared.evidenceVersion) throw stale();
+            transitions.publishPreparedReport(memberId,sessionId,
+                    new AssessmentTransitionRequest(prepared.id.toString(),prepared.evidenceVersion),
+                    current -> reports.saveAndFlush(prepared));
+            return view(prepared);
+        });
+    }
+
+    private AssessmentReport prepareIfAbsent(String memberId, UUID sessionId) {
+        if (reports.findBySessionIdAndMemberId(sessionId,memberId).isPresent()) return null;
+        try { return prepare(memberId,sessionId); }
+        catch (ApiException conflict) {
+            // Another publisher may commit between our absence check and the evidence read.
+            // Still execute the command below, so required keys and operation reuse are validated.
+            if (conflict.code().equals("ASSESSMENT_EVIDENCE_STALE")
+                    && reports.findBySessionIdAndMemberId(sessionId,memberId).isPresent()) return null;
+            throw conflict;
         }
+    }
+
+    private AssessmentReport prepare(String memberId, UUID sessionId) {
         // B 근거는 커밋된 스냅샷으로 읽는다. 이 version으로 만든 리포트만 저장할 수 있다.
         var snapshot = evidence.get(memberId, sessionId);
         var saved = problems.findBySessionIdAndMemberIdOrderBySequence(sessionId, memberId);
@@ -73,21 +100,7 @@ class AssessmentReportService {
             throw stale();
         }
         var content = build(snapshot, saved, histories);
-        var report = new AssessmentReport(sessionId, memberId, snapshot.version(), json.writeValueAsString(content));
-        try {
-            transitions.publishReport(memberId, sessionId, key,
-                    new AssessmentTransitionRequest(report.id.toString(), snapshot.version()), locked -> {
-                        // 계산에 쓴 근거와 잠근 시점의 세션이 다르면 저장하지 않는다.
-                        if (locked.version() != snapshot.version()) {
-                            throw stale();
-                        }
-                        reports.saveAndFlush(report);
-                    });
-        } catch (LearningException conflict) {
-            // 같은 학습의 다른 요청이 먼저 리포트를 만들었다면 그 리포트를 돌려준다.
-            return reports.findBySessionIdAndMemberId(sessionId, memberId).map(this::view).orElseThrow(() -> conflict);
-        }
-        return view(report);
+        return new AssessmentReport(sessionId, memberId, snapshot.version(), json.writeValueAsString(content));
     }
 
     ReportView get(String memberId, UUID sessionId) {
@@ -98,28 +111,18 @@ class AssessmentReportService {
 
     /** 학생이 리포트를 확인하면 학습을 종료한다. 종료된 학습은 홈의 이어하기 대상에서 빠진다. */
     ReportView confirm(String memberId, UUID sessionId, String key) {
-        var session = sessions.get(memberId, sessionId);
-        var report = reports.findBySessionIdAndMemberId(sessionId, memberId)
-                .orElseThrow(AssessmentReportService::notReady);
-        if (session.status().equals("completed")) {
-            return view(report);
-        }
-        try {
-            transitions.completeLearning(memberId, sessionId, key,
-                    new AssessmentTransitionRequest(report.id.toString(), session.version()), locked -> {
-                        var managed = reports.findById(report.id).orElseThrow(AssessmentReportService::notReady);
-                        if (managed.confirmedAt == null) {
-                            managed.confirmedAt = Instant.now().truncatedTo(ChronoUnit.MICROS);
-                            reports.saveAndFlush(managed);
-                        }
-                    });
-        } catch (LearningException conflict) {
-            // 다른 요청이 먼저 종료했다면 성공으로 본다.
-            if (!sessions.get(memberId, sessionId).status().equals("completed")) {
-                throw conflict;
+        return commands.execute(memberId,sessionId,key,"c/report/confirm","",ReportView.class, session -> {
+            var report=reports.findBySessionIdAndMemberId(sessionId,memberId)
+                    .orElseThrow(AssessmentReportService::notReady);
+            if (!session.status().equals("completed")) {
+                transitions.completePreparedLearning(memberId,sessionId,
+                        new AssessmentTransitionRequest(report.id.toString(),session.version()), locked -> {
+                            report.confirmedAt=Instant.now().truncatedTo(ChronoUnit.MICROS);
+                            reports.saveAndFlush(report);
+                        });
             }
-        }
-        return view(reports.findById(report.id).orElseThrow(AssessmentReportService::notReady));
+            return view(report);
+        });
     }
 
     private ReportContent build(LearningEvidenceView snapshot, List<AssessmentProblem> saved,
