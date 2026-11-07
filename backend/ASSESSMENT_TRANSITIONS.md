@@ -2,9 +2,9 @@
 
 C가 평가·리포트 DB 저장과 B의 상태 변경을 하나의 트랜잭션으로 처리하는 내부 서비스입니다. 사용자용 상태 강제 변경 HTTP API는 추가하지 않습니다. 실제 채점·리포트 생성·학습 종료 기준의 구현은 C가 담당합니다.
 
-## 연결 대기와 완료 기준
+## 연결 상태와 완료 기준
 
-현재 저장소에는 운영용 C 평가·리포트 구현이 없습니다. C가 AssessmentStateSource Spring bean을 구현하기 전 새 전환은 503 ASSESSMENT_INTEGRATION_PENDING으로 거절하고 C 저장 콜백도 실행하지 않습니다. 테스트용 리포트 테이블과 어댑터는 src/test에만 있습니다.
+운영 C의 AssessmentReportStateSource가 실제 평가·리포트 기록을 확인합니다. C의 리포트 HTTP API는 LearningCommands에서 요청 지문·성공 이력을 관리하고, 같은 트랜잭션에서 publishPreparedReport·completePreparedLearning을 호출합니다. 기존 publishReport·completeLearning 계약은 유지합니다. 어댑터가 없는 배포는 여전히 503 ASSESSMENT_INTEGRATION_PENDING입니다. 실제 원문 기반 문항 생성·채점은 별도 연결 대기이며, 고정 데모 설정과 구분합니다.
 
 전환은 두 동작으로 구분합니다.
 
