@@ -3,6 +3,8 @@ package com.teachmi.backend.assessment;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.List;
+import java.util.concurrent.Executors;
 import com.teachmi.backend.auth.AuthFilter;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,6 +19,7 @@ import org.springframework.web.context.WebApplicationContext;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 @SpringBootTest(properties = "teachmi.assessment.demo-enabled=true")
@@ -153,6 +156,115 @@ class AssessmentRelearnApiTest {
                 """, id, sessionId, sequence, stage, text);
     }
 
+private void confirmOrigin() throws Exception {
+        finishWithOneWrongAnswer();
+        assertThat(write(path()+"/report/confirm","c1",null).getStatus()).isEqualTo(200);
+    }
+    private MockHttpServletResponse ordinary(String key,Map<String,?> replacement) throws Exception {
+        var body=new HashMap<String,Object>();
+        body.put("materialId",materialId);body.put("conceptId",conceptId);body.putAll(replacement);
+        return write("/api/v1/sessions",key,body);
+    }
+    private long linkCount() {
+        return jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_relearn WHERE origin_session_id=?",Long.class,session);
+    }
+
+    @Test void anOrdinaryCreateKeyCannotTurnItsExistingSessionIntoARelearning() throws Exception {
+        confirmOrigin();
+        var ordinary=ordinary("ordinary",Map.of());
+        assertThat(ordinary.getStatus()).isEqualTo(201);
+        var ordinaryId=body(ordinary).path("sessionId").asText();
+        code(relearn("ordinary",Map.of()),409,"IDEMPOTENCY_KEY_REUSED");
+        assertThat(linkCount()).isZero();
+        assertThat(jdbc.queryForObject("SELECT status FROM teachmi.learning_session WHERE id=?::uuid",String.class,ordinaryId)).isEqualTo("active");
+    }
+
+    @Test void aRelearningKeyCannotBecomeAnOrdinaryCreationOrReportCommand() throws Exception {
+        confirmOrigin();
+        assertThat(relearn("relearn",Map.of()).getStatus()).isEqualTo(201);
+        code(ordinary("relearn",Map.of()),409,"IDEMPOTENCY_KEY_REUSED");
+        code(write(path()+"/report","relearn",null),409,"IDEMPOTENCY_KEY_REUSED");
+        assertThat(linkCount()).isEqualTo(1);
+    }
+
+    @Test void reportKeysCannotBeReusedForRelearning() throws Exception {
+        confirmOrigin();
+        code(relearn("p1",Map.of()),409,"IDEMPOTENCY_KEY_REUSED");
+        code(relearn("c1",Map.of()),409,"IDEMPOTENCY_KEY_REUSED");
+        assertThat(linkCount()).isZero();
+    }
+
+    @Test void changedFocusOnTheSameKeyIsRejectedWithoutAnotherSession() throws Exception {
+        confirmOrigin();
+        assertThat(relearn("same",Map.of("problemId",first.toString())).getStatus()).isEqualTo(201);
+        code(relearn("same",Map.of()),409,"IDEMPOTENCY_KEY_REUSED");
+        assertThat(linkCount()).isEqualTo(1);
+    }
+
+    @Test void concurrentSameKeyRequestsReturnOneIdenticalSessionAndLink() throws Exception {
+        confirmOrigin();
+        try(var executor=Executors.newFixedThreadPool(2)) {
+            var a=executor.submit(() -> relearn("same",Map.of("problemId",first.toString())));
+            var b=executor.submit(() -> relearn("same",Map.of("problemId",first.toString())));
+            var ra=a.get(20,java.util.concurrent.TimeUnit.SECONDS);var rb=b.get(20,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(ra.getStatus()).isEqualTo(201);assertThat(rb.getStatus()).isEqualTo(201);
+            assertThat(body(ra)).isEqualTo(body(rb));
+        }
+        assertThat(linkCount()).isEqualTo(1);
+    }
+
+    @Test void concurrentDifferentKeysStillNeedExplicitReplacement() throws Exception {
+        confirmOrigin();
+        try(var executor=Executors.newFixedThreadPool(2)) {
+            var a=executor.submit(() -> relearn("a",Map.of()));
+            var b=executor.submit(() -> relearn("b",Map.of()));
+            var ra=a.get(20,java.util.concurrent.TimeUnit.SECONDS);var rb=b.get(20,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(List.of(ra.getStatus(),rb.getStatus())).containsExactlyInAnyOrder(201,409);
+            var conflict=ra.getStatus()==409?ra:rb;
+            code(conflict,409,"ACTIVE_SESSION_EXISTS");
+        }
+        assertThat(linkCount()).isEqualTo(1);
+    }
+
+    @Test void linkFailureRollsBackCreationReplacementAndReceiptAndTheSameRequestCanRetry() throws Exception {
+        confirmOrigin();
+        var current=body(ordinary("before",Map.of()));
+        var oldId=current.path("sessionId").asText();
+        var replace=Map.of("replaceSessionId",oldId,"expectedVersion",current.path("version").asLong());
+        // Test-only constraint forces failure precisely at C persistence, after B created/replaced a session.
+        jdbc.execute("ALTER TABLE teachmi.assessment_relearn ADD CONSTRAINT test_atomic_relearn CHECK(member_id <> '"+owner.id()+"')");
+        try {
+            assertThatThrownBy(() -> relearn("rollback",replace)).hasRootCauseInstanceOf(java.sql.SQLException.class);
+            assertThat(linkCount()).isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_session WHERE member_id=?",Long.class,owner.id())).isEqualTo(2);
+            assertThat(jdbc.queryForObject("SELECT status FROM teachmi.learning_session WHERE id=?::uuid",String.class,oldId)).isEqualTo("active");
+            assertThat(jdbc.queryForObject("SELECT version FROM teachmi.learning_session WHERE id=?::uuid",Long.class,oldId))
+                    .isEqualTo(current.path("version").asLong());
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_session_request WHERE member_id=? AND request_key='rollback'",Long.class,owner.id())).isZero();
+        } finally { jdbc.execute("ALTER TABLE teachmi.assessment_relearn DROP CONSTRAINT test_atomic_relearn"); }
+        assertThat(relearn("rollback",replace).getStatus()).isEqualTo(201);
+        assertThat(linkCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT status FROM teachmi.learning_session WHERE id=?::uuid",String.class,oldId)).isEqualTo("abandoned");
+    }
+
+    @Test void replayAfterReplacementPreservesTheOriginalResponseAndDoesNotCreateAgain() throws Exception {
+        confirmOrigin();
+        var original=body(relearn("relearn",Map.of("problemId",first.toString())));
+        var child=original.path("session");
+        assertThat(ordinary("replace",Map.of("replaceSessionId",child.path("sessionId").asText(),
+                "expectedVersion",child.path("version").asLong())).getStatus()).isEqualTo(201);
+        var replay=relearn("relearn",Map.of("problemId",first.toString()));
+        assertThat(replay.getStatus()).isEqualTo(201);
+        assertThat(body(replay)).isEqualTo(original);
+        assertThat(linkCount()).isEqualTo(1);
+    }
+
+    @Test void missingOrBlankKeysNeverCreateARelearning() throws Exception {
+        confirmOrigin();
+        code(relearn(null,Map.of()),422,"INVALID_IDEMPOTENCY_KEY");
+        code(relearn(" ",Map.of()),422,"INVALID_IDEMPOTENCY_KEY");
+        assertThat(linkCount()).isZero();
+    }
     private String path() {
         return "/api/v1/sessions/" + session;
     }

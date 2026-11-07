@@ -34,12 +34,22 @@ public class LearningSessionService {
 
     @Transactional
     public SessionView create(String memberId, String key, CreateSessionRequest request) {
-        validateKey(key);
+        return createInternal(memberId,key,request,true);
+    }
+
+    /** Only inside LearningCommands: its external operation fingerprint and receipt own this creation. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public SessionView createInCommand(String memberId, CreateSessionRequest request) {
+        return createInternal(memberId,null,request,false);
+    }
+
+    private SessionView createInternal(String memberId, String key, CreateSessionRequest request, boolean ownReceipt) {
+        if (ownReceipt) validateKey(key);
         lockMember(memberId);
         String requestJson = json.writeValueAsString(request);
-        var previous = replay(memberId, key, requestJson);
-        if (previous.isPresent()) {
-            return previous.get();
+        if (ownReceipt) {
+            var previous = replay(memberId, key, requestJson);
+            if (previous.isPresent()) return previous.get();
         }
 
         var active = sessions.findByMemberIdAndStatus(memberId, "active");
@@ -67,7 +77,7 @@ public class LearningSessionService {
         var created = sessions.saveAndFlush(new LearningSession(memberId, request,
                 json.writeValueAsString(snapshot)));
         var result = view(created);
-        remember(memberId, key, requestJson, result);
+        if (ownReceipt) remember(memberId, key, requestJson, result);
         return result;
     }
 
