@@ -38,6 +38,7 @@ class AssessmentAttemptApiTest {
     @Autowired AssessmentProblemRepository problems;
     @Autowired AssessmentAttemptRepository attempts;
     @Autowired TransactionTemplate transaction;
+    @Autowired ReteachReturns returns;
     MockMvc mvc;
     Cookie cookie;
     String csrf,member;
@@ -81,7 +82,7 @@ class AssessmentAttemptApiTest {
     AssessmentAttemptService using(AnswerGrader grader) {
         var beans=new StaticListableBeanFactory();
         if (grader != null) beans.addBean("grader",grader);
-        return new AssessmentAttemptService(sessions,access,problems,attempts,beans.getBeanProvider(AnswerGrader.class),json);
+        return new AssessmentAttemptService(sessions,access,problems,attempts,beans.getBeanProvider(AnswerGrader.class),json,returns);
     }
     AttemptViews.AttemptView direct(AssessmentAttemptService target,String key) {
         return transaction.execute(status -> target.submit(member,session,first,key,new AttemptViews.SubmitRequest("200만 원","600 ÷ 3")));
@@ -145,7 +146,7 @@ class AssessmentAttemptApiTest {
     @Test void anotherMemberCannotSubmitToTheOwnersProblem() throws Exception {
         var other=login();
         var response=mvc.perform(post(path(first)).cookie(other.cookie()).header("X-CSRF-Token",other.csrf())
-                .header("Idempotency-Key","foreign").contentType("application/json").content(payload("200만원","풀이")))
+                        .header("Idempotency-Key","foreign").contentType("application/json").content(payload("200만원","풀이")))
                 .andReturn().getResponse();
         assertThat(response.getStatus()).isEqualTo(404);
         assertThat(count()).isZero();
@@ -157,7 +158,7 @@ class AssessmentAttemptApiTest {
         assertThat(mvc.perform(post(path(first)).cookie(cookie).header("Idempotency-Key","no-csrf")
                 .contentType("application/json").content(request)).andReturn().getResponse().getStatus()).isEqualTo(403);
         assertThat(mvc.perform(post(path(first)).cookie(cookie).header("X-CSRF-Token","invalid")
-                .header("Idempotency-Key","bad-csrf").contentType("application/json").content(request))
+                        .header("Idempotency-Key","bad-csrf").contentType("application/json").content(request))
                 .andReturn().getResponse().getStatus()).isEqualTo(403);
         assertThat(count()).isZero();
     }
@@ -165,7 +166,7 @@ class AssessmentAttemptApiTest {
         for (var content:List.of("{}", "{\"answer\":null,\"work\":\"풀이\"}",payload(" ","풀이"),
                 payload("200만원",""),payload("a".repeat(2001),"풀이"),payload("200만원","a".repeat(4001)))) {
             var response=mvc.perform(post(path(first)).cookie(cookie).header("X-CSRF-Token",csrf)
-                    .header("Idempotency-Key","invalid").contentType("application/json").content(content))
+                            .header("Idempotency-Key","invalid").contentType("application/json").content(content))
                     .andReturn().getResponse();
             code(response,422,"INVALID_REQUEST");
         }
