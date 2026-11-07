@@ -7,6 +7,8 @@ import java.util.UUID;
 import com.teachmi.backend.auth.AuthFilter;
 import com.teachmi.backend.learning.LearningContentGenerator;
 import com.teachmi.backend.learning.LearningReteachGenerator;
+import com.teachmi.backend.learning.LearningDialogueGenerator;
+import java.util.concurrent.Executors;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -30,6 +32,10 @@ class AssessmentFollowUpApiTest {
     /** 실제 Gemini 대신 재설명 첫 질문을 고정한다. 비용이 드는 호출은 하지 않는다. */
     @TestConfiguration(proxyBeanMethods = false)
     static class StubGeneration {
+        @Bean @Primary LearningDialogueGenerator testReteachDialogue() {
+            return context -> new LearningDialogueGenerator.Reply("다른 예로 개념과 이유를 설명해 줄래?",
+                    context.kind().equals("answer"), context.learning().concept().sourceChunkIds());
+        }
         // 로컬 .env에서 Gemini를 켜 둔 경우에도 이 테스트용 생성기를 쓰도록 우선순위를 준다.
         @Bean
         @Primary
@@ -151,16 +157,92 @@ class AssessmentFollowUpApiTest {
         assertThat(solution(other, first).getStatus()).isEqualTo(404);
     }
 
-    /** B의 재설명 대화를 끝까지 진행하는 대신, 대화가 끝난 뒤 B가 남기는 상태를 만든다. version도 실제처럼 올린다. */
-    private void finishReteach(String reteachId) {
-        jdbc.update("UPDATE teachmi.learning_reteach SET state='returned', completed_at=now() WHERE id=?::uuid",
-                reteachId);
-        jdbc.update("""
-                UPDATE teachmi.learning_session
-                SET stage='problem', active_reteach_id=NULL, return_reteach_id=?::uuid, version=version+1
-                WHERE id=?""", reteachId, session);
+    /** Exercise the real B dialogue, persistence, and return marker; replace only model calls. */
+    private void finishReteach(String reteachId) throws Exception {
+        for (int i=0;i<4;i++) {
+            var response=mvc.perform(post("/api/v1/sessions/"+session+"/turns").cookie(owner.cookie())
+                    .header("X-CSRF-Token",owner.csrf()).header("Idempotency-Key","turn-"+reteachId+"-"+i)
+                    .contentType("application/json").content(json.writeValueAsString(Map.of(
+                            "kind","answer","text","원가를 사용 기간에 나누는 이유를 설명합니다.","expectedVersion",version()))))
+                    .andReturn().getResponse();
+            assertThat(response.getStatus()).isEqualTo(200);
+            if(i==3) {
+                assertThat(body(response).path("stage").asText()).isEqualTo("problem");
+                assertThat(body(response).path("problemReturn").path("reteachId").asText()).isEqualTo(reteachId);
+            }
+        }
     }
 
+@Test void bothPublicRoutesRejectStaleEvidenceBeforeStarting() throws Exception {
+        var attempt=wrong(first,"wrong");
+        jdbc.update("UPDATE teachmi.learning_session SET version=version+1 WHERE id=?",session);
+        code(reteach(owner,first,attempt,"c-route"),409,"ASSESSMENT_EVIDENCE_STALE");
+        var response=mvc.perform(post("/api/v1/sessions/"+session+"/reteach").cookie(owner.cookie())
+                .header("X-CSRF-Token",owner.csrf()).header("Idempotency-Key","b-route")
+                .contentType("application/json").content(json.writeValueAsString(Map.of(
+                        "problemId",first.toString(),"attemptId",attempt,"expectedVersion",version()))))
+                .andReturn().getResponse();
+        code(response,409,"ASSESSMENT_EVIDENCE_STALE");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_reteach WHERE session_id=?",Long.class,session)).isZero();
+    }
+
+    @Test void theBRouteStillAllowsFreshReteachAndItsFullReturn() throws Exception {
+        var attempt=wrong(first,"wrong");
+        var response=mvc.perform(post("/api/v1/sessions/"+session+"/reteach").cookie(owner.cookie())
+                .header("X-CSRF-Token",owner.csrf()).header("Idempotency-Key","b-fresh")
+                .contentType("application/json").content(json.writeValueAsString(Map.of(
+                        "problemId",first.toString(),"attemptId",attempt,"expectedVersion",version()))))
+                .andReturn().getResponse();
+        assertThat(response.getStatus()).isEqualTo(200);
+        finishReteach(body(response).path("activeReteach").path("reteachId").asText());
+        assertThat(submit(first,"retry","200만원").getStatus()).isEqualTo(201);
+    }
+
+    @Test void simultaneousReturnRetriesWithTheSameKeyReplayOneAttempt() throws Exception {
+        finishReteach(startReteach(first,wrong(first,"first-wrong")));
+        try(var connection=jdbc.getDataSource().getConnection();var executor=Executors.newFixedThreadPool(2)) {
+            connection.setAutoCommit(false);
+            try(var statement=connection.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?,0))")) {
+                statement.setString(1,"teachmi:learning:"+owner.id());statement.execute();
+            }
+            var a=executor.submit(() -> submit(first,"same-retry","200만원"));
+            var b=executor.submit(() -> submit(first,"same-retry","200만원"));
+            try {
+                long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+                while(jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory'",Integer.class)<2
+                        && System.nanoTime()<deadline) Thread.sleep(25);
+                assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity WHERE wait_event='advisory'",Integer.class)).isGreaterThanOrEqualTo(2);
+            } finally { connection.commit(); }
+            var ra=a.get(20,java.util.concurrent.TimeUnit.SECONDS);
+            var rb=b.get(20,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(ra.getStatus()).isEqualTo(201);
+            assertThat(rb.getStatus()).isEqualTo(201);
+            assertThat(body(ra)).isEqualTo(body(rb));
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_attempt WHERE problem_id=?",Long.class,first)).isEqualTo(2);
+        }
+    }
+
+    @Test void simultaneousReturnRetriesWithDifferentKeysPreserveTheFirstAndOneRetry() throws Exception {
+        finishReteach(startReteach(first,wrong(first,"first-wrong")));
+        try(var executor=Executors.newFixedThreadPool(2)) {
+            var a=executor.submit(() -> submit(first,"retry-a","200만원"));
+            var b=executor.submit(() -> submit(first,"retry-b","200만원"));
+            assertThat(List.of(a.get(20,java.util.concurrent.TimeUnit.SECONDS).getStatus(),
+                    b.get(20,java.util.concurrent.TimeUnit.SECONDS).getStatus())).containsExactlyInAnyOrder(201,409);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_attempt WHERE problem_id=?",Long.class,first)).isEqualTo(2);
+    }
+
+    @Test void concurrentSolutionRequestsPreserveTheFirstViewTimestamp() throws Exception {
+        wrong(first,"wrong");
+        try(var executor=Executors.newFixedThreadPool(2)) {
+            var a=executor.submit(() -> solution(owner,first));
+            var b=executor.submit(() -> solution(owner,first));
+            var ra=a.get(20,java.util.concurrent.TimeUnit.SECONDS);var rb=b.get(20,java.util.concurrent.TimeUnit.SECONDS);
+            assertThat(ra.getStatus()).isEqualTo(200);assertThat(rb.getStatus()).isEqualTo(200);
+            assertThat(body(ra)).isEqualTo(body(rb));
+        }
+    }
     private String startReteach(UUID problem, String attemptId) throws Exception {
         var response = reteach(owner, problem, attemptId, "r-" + UUID.randomUUID());
         assertThat(response.getStatus()).isEqualTo(200);
