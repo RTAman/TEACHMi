@@ -18,6 +18,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      DB_PORT: '55464'
+      GEMINI_ENABLED: 'false'
+      GEMINI_API_KEY: ''
+      GEMINI_MODEL: ''
     defaults:
       run:
         working-directory: backend
@@ -37,3 +42,10 @@ jobs:
         run: ./api/Test-LearningRequest.ps1
       - name: Build and run PostgreSQL integration and OpenAPI contract tests
         run: ./gradlew --no-daemon build
+      - name: Verify offline A B C HTTP journeys and restart recovery
+        env:
+          TEACHMI_OFFLINE_HTTP_TEST: 'true'
+          DB_URL: jdbc:postgresql://127.0.0.1:55464/postgres
+          DB_USER: teachmi
+          DB_PASSWORD: teachmi_local_only
+        run: ./gradlew --no-daemon offlineHttpTest

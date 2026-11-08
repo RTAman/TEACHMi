@@ -170,7 +170,7 @@
             "$ref": "#/components/responses/NotFound"
           }
         },
-        "description": "재접속 GET은 선택적 recovery로 터미널 보류 상태를 복원합니다. AI_GENERATION_UNCERTAIN/AI_ATTEMPT_LIMIT이면 availableActions=wait이지만 자동 완료 대기가 아닙니다."
+        "description": "재접속 GET은 선택적 recovery로 터미널 보류 상태를 복원합니다. AI_GENERATION_UNCERTAIN/AI_ATTEMPT_LIMIT이면 availableActions=wait이지만 자동 완료 대기가 아닙니다. 모드 선택·첫 질문·C 생성처럼 pendingTurn이 없는 단계도 현재 회원·학습의 uncertain/임대 만료 running 원장을 읽기 전용으로 확인합니다. 해당 보류는 recovery.action=review_required 및 availableActions=wait로 복원하며 생성이 비활성화되어도 유지됩니다. 원장·시도 수·캐시·세션 버전은 변경하지 않습니다."
       }
     },
     "/api/v1/sessions/{sessionId}/mode": {

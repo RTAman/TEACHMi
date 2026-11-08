@@ -38,8 +38,22 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform {
-        excludeTags 'gemini-live'
+        excludeTags 'gemini-live', 'offline-http'
     }
+}
+
+tasks.register('offlineHttpTest', Test) {
+    description = 'Opt-in local HTTP A/B/C journeys with a replacement Gemini transport and isolated PostgreSQL.'
+    group = 'verification'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform { includeTags 'offline-http' }
+    doFirst {
+        if (System.getenv('TEACHMI_OFFLINE_HTTP_TEST') != 'true') {
+            throw new GradleException('Set TEACHMI_OFFLINE_HTTP_TEST=true with a fresh local test PostgreSQL cluster.')
+        }
+    }
+    shouldRunAfter tasks.named('test')
 }
 
 tasks.register('geminiLiveTest', Test) {

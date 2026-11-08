@@ -20,16 +20,27 @@ public class LearningSessionService {
     private final ObjectMapper json;
     private final LearningMessageRepository messages;
     private final ObjectProvider<LearningContentGenerator> generators;
+    private final ObjectProvider<LearningGenerationRecoverySource> recoverySources;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public LearningSessionService(LearningSessionRepository sessions, ObjectProvider<ConceptSource> concepts,
                                   JdbcTemplate jdbc, ObjectMapper json, LearningMessageRepository messages,
-                                  ObjectProvider<LearningContentGenerator> generators) {
+                                  ObjectProvider<LearningContentGenerator> generators,
+                                  ObjectProvider<LearningGenerationRecoverySource> recoverySources) {
         this.sessions = sessions;
         this.concepts = concepts;
         this.jdbc = jdbc;
         this.json = json;
         this.messages = messages;
         this.generators = generators;
+        this.recoverySources = recoverySources;
+    }
+
+    /** Preserve existing source callers; Spring uses the status-aware constructor above. */
+    public LearningSessionService(LearningSessionRepository sessions, ObjectProvider<ConceptSource> concepts,
+                                  JdbcTemplate jdbc, ObjectMapper json, LearningMessageRepository messages,
+                                  ObjectProvider<LearningContentGenerator> generators) {
+        this(sessions,concepts,jdbc,json,messages,generators,null);
     }
 
     @Transactional
@@ -274,6 +285,9 @@ public class LearningSessionService {
         ProblemReturn problemReturn = returned == null || !session.status.equals("active") ? null
                 : new ProblemReturn(returned.reteachId(), returned.problemId(), returned.attemptId(),
                 "/api/v1/sessions/" + session.id + "/problems/" + returned.problemId());
+        var recoverySource=recoverySources==null?null:recoverySources.getIfAvailable();
+        var recovery=!session.status.equals("active") || recoverySource==null?null
+                :recoverySource.unresolved(session.memberId,session.id);
         return new SessionView(session.id, session.materialId, session.conceptId,
                 json.readValue(session.conceptSnapshot, ConceptSource.Snapshot.class),
                 session.mode, session.stage, session.status, session.version,
@@ -289,7 +303,8 @@ public class LearningSessionService {
                                 List.of(json.readValue(message.sourceChunkIds, String[].class)),
                                 message.createdAt, message.supportEventId, message.reteachId)).toList(),
                 session.initialAnswerId, session.finalExplanationId, supports, pending,
-                actions(session, pending, active, problemReturn), active, problemReturn, episodes);
+                recovery==null?actions(session, pending, active, problemReturn):List.of("wait"),
+                active, problemReturn, episodes,recovery);
     }
 
     private List<String> actions(LearningSession session, TurnProgress pending, ReteachView active, ProblemReturn returned) {

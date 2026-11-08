@@ -90,6 +90,8 @@ B 대화·재설명 첫 질문은 `teachmi-dialogue-v2`·`teachmi-reteach-v2`를
 
 `availableActions=["wait"]`는 기존 API의 작업 차단 표시입니다. 무조건 처리 중이라는 뜻이 아닙니다. `AI_GENERATION_UNCERTAIN`/`review_required`와 `AI_ATTEMPT_LIMIT`/`limit_reached`에서는 로딩·자동 폴링·자동 POST를 종료하고 저장된 입력과 확인 안내를 보여줍니다. 재접속 GET의 선택적 recovery에도 같은 규칙을 적용합니다. 세부 화면 규칙은 [대화 API](CONVERSATION_TURNS.md#로딩과-확인-대기-구분)를 따릅니다.
 
+세션 GET의 LearningGenerationRecoverySource는 원장을 읽기만 합니다. pendingTurn이 없는 모드/첫 질문/C 생성의 uncertain과 만료된 running도 복원하며, 소유권 확인 뒤 현재 회원·학습으로 조회 범위를 제한합니다. Gemini 비활성화도 기존 보류를 해제하지 않습니다. 캐시 키, 임대, 시도 수, 원장 상태와 세션 버전을 변경하거나 공급자 호출을 예약하지 않습니다.
+
 1. 지원 건에 회원·세션 식별자, UTC 발생 시각, 오류 코드, recovery.stage/diagnosticCode, 앱 배포 버전과 모델·타임아웃·출력 상한을 기록합니다. 키, 원문, 대화 본문과 AI 응답 전문은 지원 티켓이나 GitHub에 복사하지 않습니다. 회원 소유권을 확인하고 접근 권한이 있는 운영자가 해당 DB를 읽기 전용으로 조회합니다.
 2. 해당 회원·세션의 생성 상태·시도 수·마지막 진단·임대 시각과 호출 예약을 비교합니다. 아래 SQL은 바인딩 변수를 쓰는 읽기 전용 템플릿입니다. 운영 도구에서 실제 값을 바인딩하며 원문/content_json은 선택하지 않습니다. 운영 DB를 테스트 DB로 사용하거나 다른 회원의 기록을 넓게 조회하지 않습니다.
 
