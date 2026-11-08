@@ -10,7 +10,10 @@
 | 회원가입 | `POST /api/v1/auth/signup` | 201 → 로그인 화면 (자동 로그인 안 됨) |
 | 이메일 로그인 | `POST /api/v1/auth/login` | 200 → 홈 |
 | 마이페이지 로그아웃 | `POST /api/v1/auth/logout` | 204 → 로그인 화면 |
-| S02-5 직접 입력 저장 | `POST /api/v1/materials` | 201 → S03 (materialId, conceptId 전달) |
+| S02-1 파일 업로드 | `POST /api/v1/materials` (multipart) | 202 → S02-2 분석 중 |
+| S02-2 분석 중 | `GET /api/v1/materials/{materialId}`를 2초 간격 | `done` → S02-4, `failed` → S02-3 |
+| S02-3 분석 실패 | 다시 시도 `POST …/retry` 또는 직접 입력 | 202 → S02-2, 직접 입력 → S02-5 |
+| S02-5 직접 입력 저장 | `POST /api/v1/materials` (JSON) | 201 → S03 (materialId, conceptId 전달) |
 | S02-4 개념 선택 | `GET /api/v1/materials/{materialId}` | 개념 카드 표시 |
 | S02-5 개념 추가·수정 | `POST …/concepts`, `PATCH …/concepts/{conceptId}` | 목록 갱신 |
 | S03 시작 | B의 `POST /api/v1/sessions` | B 문서 참고 |
@@ -37,7 +40,8 @@ const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 export async function api<T>(path: string, init: RequestInit & { idempotencyKey?: string } = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  // FormData(파일 업로드)는 브라우저가 Content-Type을 정하므로 JSON 문자열일 때만 지정합니다.
+  if (typeof init.body === 'string' && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (UNSAFE.has(method) && csrfToken) headers.set('X-CSRF-Token', csrfToken);
   if (init.idempotencyKey) headers.set('Idempotency-Key', init.idempotencyKey);
 
@@ -110,6 +114,45 @@ setCsrfToken(null);
 
 기기 임시 저장(작성 중인 설명·답안)은 **회원 ID별로 키를 나눠** 저장하고, 로그아웃할 때 비웁니다. 그래야 다른 계정으로 로그인했을 때 이전 사람의 내용이 보이지 않습니다.
 
+### S02-1~3 파일 업로드와 분석
+
+PDF·PPT·PPTX 파일 하나를 올립니다(기본 20MB 이하). 서버는 바로 `202`와 `status: "analyzing"`을 돌려주고 분석을 계속합니다. **사용자가 화면을 닫아도 분석은 진행되니**, 다시 들어오면 같은 `materialId`로 조회하면 됩니다.
+
+```ts
+const form = new FormData();
+form.append('file', file);                       // <input type="file" accept=".pdf,.ppt,.pptx">
+// form.append('title', '회계원리 7주차');         // 선택. 생략하면 확장자를 뺀 파일 이름
+const key = crypto.randomUUID();                 // 업로드 버튼을 누를 때 한 번. 재전송에는 같은 키
+let material = await api<MaterialView>('/materials', { method: 'POST', idempotencyKey: key, body: form });
+
+// S02-2: 분석이 끝날 때까지 2초 간격으로 조회
+while (material.status === 'analyzing') {
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  material = await api<MaterialView>(`/materials/${material.materialId}`);
+}
+// done → S02-4 개념 선택, failed → S02-3 실패 화면 (errorCode로 문구 분기)
+```
+
+| 업로드 즉시 오류 | 상황 | 안내 문구 예시 |
+| --- | --- | --- |
+| `415 UNSUPPORTED_FORMAT` | PDF·PPT·PPTX가 아님 | PDF나 PPT 파일만 올릴 수 있어요 |
+| `413 FILE_TOO_LARGE` | 20MB 초과 | 20MB 이하 파일로 올려 주세요 |
+| `422 FILE_REQUIRED` | 빈 파일 | 파일을 선택해 주세요 |
+
+| 분석 실패 `errorCode` | 상황 | S02-3 안내와 버튼 |
+| --- | --- | --- |
+| `no_text` | 글자를 읽지 못함 (스캔한 이미지 PDF 등) | "자료에서 글자를 읽지 못했어요" → [학습 내용 직접 입력] 권장 |
+| `format` | 파일이 손상됐거나 열 수 없음 | "파일을 열 수 없어요" → [다른 파일 올리기] |
+| `analysis` | 서버 처리 중 오류 | "분석 중 문제가 생겼어요" → [다시 시도] |
+
+**다시 시도**는 실패한 파일에만 쓸 수 있습니다. 성공하면 `202`와 `status: "analyzing"`이 오니 다시 조회를 시작합니다.
+
+```ts
+material = await api<MaterialView>(`/materials/${materialId}/retry`, { method: 'POST', idempotencyKey: crypto.randomUUID() });
+```
+
+**개념 후보**는 페이지·슬라이드 제목으로 만듭니다. 같은 제목이 이어지는 페이지는 하나로 묶여 `location`이 `p.6~9`처럼 나옵니다. 표지·목차·Q&A 같은 페이지는 빠집니다. 후보가 없으면 `concepts`가 빈 배열이니 "개념을 찾지 못했어요"와 [목록에 없는 개념 직접 입력] 버튼을 보여주세요.
+
 ### S02-5 직접 입력으로 자료 등록
 
 자료 본문과 학습할 개념을 한 번에 저장합니다. 바로 `status: "done"`이고 개념이 하나 들어 있습니다.
@@ -136,7 +179,8 @@ const material = await api<MaterialView>(`/materials/${materialId}`);
 | 응답 필드 | 화면에서 쓰는 곳 |
 | --- | --- |
 | `status` | `analyzing` 분석 중 / `done` 개념 선택 / `failed` 실패 화면 |
-| `errorCode` | 실패 원인별 문구: `format` 지원하지 않는 형식, `size` 용량 초과, `no_text` 글자를 읽지 못함, `analysis` 분석 오류 |
+| `errorCode` | 실패 원인별 문구: `no_text` 글자를 읽지 못함, `format` 파일을 열 수 없음, `analysis` 분석 오류 (위 표 참고) |
+| `sourceType`, `fileName` | `file`이면 업로드한 파일, `text`면 직접 입력 |
 | `concepts[].name`, `scope` | 라디오 카드의 개념명과 한 줄 설명 |
 | `concepts[].location` | 카드 오른쪽 위치 표시 (예: `p.6~9`, `직접 입력 1`) |
 | `concepts[].custom` | 사용자가 직접 추가·수정한 개념 |
@@ -193,12 +237,13 @@ Next.js라면 `next.config.js`의 `rewrites`에 같은 규칙을 넣습니다.
 2. 회원가입·로그인을 화면에서 하거나, 테스트 계정은 [AUTH_MATERIALS.md](AUTH_MATERIALS.md)의 "테스트 회원 준비"를 따라 만듭니다.
 3. 명세 보기: [api/auth-materials.openapi.json](api/auth-materials.openapi.json)을 [Swagger Editor](https://editor.swagger.io)에 붙여 넣으면 화면으로 볼 수 있습니다. TypeScript 타입이 필요하면 `npx openapi-typescript backend/api/auth-materials.openapi.json -o src/api/auth-materials.d.ts`로 생성합니다.
 
-## 7. 아직 안 되는 것
+## 7. 알아둘 제한
 
-| 기능 | 예정 | 미리 준비할 것 |
-| --- | --- | --- |
-| 파일 업로드(PDF·PPT·PPTX) | 11/7 | `POST /api/v1/materials`에 multipart로 파일을 보내면 `202`와 `materialId`가 옵니다. 이후 `GET /materials/{id}`를 2초 간격으로 조회해 `status`가 `done`·`failed`가 될 때까지 분석 중 화면을 보여줍니다 |
-| 분석 실패 재시도 | 11/7 | 실패 화면의 "다시 시도"는 `POST /materials/{id}/retry` |
-| 파일 최대 용량 | 기획 이슈 #1 결정 후 | 용량 초과는 업로드 즉시 `413` |
+| 항목 | 현재 동작 |
+| --- | --- |
+| 파일 최대 용량 | 기본 20MB. 기획에서 정하면 서버 환경 변수 `MATERIAL_MAX_FILE_SIZE`로 바꿉니다 |
+| 스캔한 이미지 PDF | 글자 인식(OCR)을 하지 않아 `no_text`로 실패합니다. 직접 입력으로 안내해 주세요 |
+| 개념 후보 | AI가 아니라 페이지·슬라이드 제목으로 만듭니다. 이름·범위는 S02-5에서 고칠 수 있습니다 |
+| 분석 취소 | 업로드 취소 API는 없습니다. 다른 파일을 올리면 새 자료로 처리됩니다 |
 
 변경이 생기면 이 문서와 명세를 같은 PR에서 함께 고칩니다.

@@ -30,9 +30,13 @@ public class MaterialService {
     static final int CHUNK_TARGET_CHARS = 2000;
 
     private final JdbcTemplate jdbc;
+    private final MaterialAnalysis analysis;
+    private final MaterialConfiguration.MaterialProperties properties;
 
-    MaterialService(JdbcTemplate jdbc) {
+    MaterialService(JdbcTemplate jdbc, MaterialAnalysis analysis, MaterialConfiguration.MaterialProperties properties) {
         this.jdbc = jdbc;
+        this.analysis = analysis;
+        this.properties = properties;
     }
 
     record Created<T>(T value, boolean replayed) {}
@@ -84,6 +88,67 @@ public class MaterialService {
         return new Created<>(load(userId, materialId), false);
     }
 
+    // ---------------------------------------------------------------- 파일 업로드·재시도
+
+    /** 파일을 저장하고 분석을 예약한다. 형식·용량은 즉시 검사하고, 분석 결과는 GET으로 확인한다. */
+    @Transactional
+    public Created<MaterialView> createFile(UUID userId, String key, String fileName, byte[] content, String rawTitle) {
+        if (content == null || content.length == 0) {
+            throw ApiException.invalid("FILE_REQUIRED", "업로드할 파일을 선택하세요.");
+        }
+        if (content.length > properties.maxFileSize().toBytes()) {
+            throw new ApiException(413, "FILE_TOO_LARGE",
+                    "파일은 " + properties.maxFileSize().toMegabytes() + "MB 이하로 올려 주세요.");
+        }
+        var format = MaterialFormat.detect(fileName, content).orElseThrow(() ->
+                new ApiException(415, "UNSUPPORTED_FORMAT", "PDF, PPT, PPTX 파일만 올릴 수 있습니다."));
+        String name = displayFileName(fileName);
+        String title = rawTitle == null || rawTitle.isBlank() ? stripExtension(name) : rawTitle.strip();
+        if (title.length() > 200) {
+            throw ApiException.invalid("INVALID_REQUEST", "자료 제목은 200자 이하로 입력하세요.");
+        }
+        String fileHash = sha256(content);
+        String hash = hash("file", name, title, fileHash);
+        var replay = claimKey(userId, key, "upload_material", hash);
+        if (replay.isPresent()) {
+            return new Created<>(load(userId, replay.get()), true);
+        }
+
+        var materialId = UUID.randomUUID();
+        var now = now();
+        jdbc.update("""
+                INSERT INTO teachmi.material(id, user_id, source_type, title, file_name, content_type, file_size, status,
+                                             analysis_version, created_at, updated_at)
+                VALUES (?, ?, 'file', ?, ?, ?, ?, 'analyzing', 1, ?, ?)
+                """, materialId, userId, title, name, format.code, (long) content.length, now, now);
+        jdbc.update("INSERT INTO teachmi.material_file(material_id, format, content, sha256, created_at) VALUES (?, ?, ?, ?, ?)",
+                materialId, format.code, content, fileHash, now);
+        recordKey(userId, key, "upload_material", hash, materialId);
+        analysis.enqueueAfterCommit(materialId, 1);
+        return new Created<>(load(userId, materialId), false);
+    }
+
+    /** 실패한 파일 분석을 새 버전으로 다시 시작한다. 이전 분석이 늦게 끝나도 새 버전 결과만 남는다. */
+    @Transactional
+    public Created<MaterialView> retry(UUID userId, UUID materialId, String key) {
+        var replay = claimKey(userId, key, "retry_material", hash("retry", materialId.toString()));
+        if (replay.isPresent()) {
+            return new Created<>(load(userId, replay.get()), true);
+        }
+        var material = lockOwned(userId, materialId);
+        if (!"file".equals(material.sourceType()) || !"failed".equals(material.status())) {
+            throw new ApiException(409, "MATERIAL_NOT_FAILED", "분석에 실패한 파일만 다시 시도할 수 있습니다.");
+        }
+        int version = material.analysisVersion() + 1;
+        jdbc.update("""
+                UPDATE teachmi.material SET status = 'analyzing', error_code = NULL, analysis_version = ?, updated_at = ?
+                WHERE id = ?
+                """, version, now(), materialId);
+        recordKey(userId, key, "retry_material", hash("retry", materialId.toString()), materialId);
+        analysis.enqueueAfterCommit(materialId, version);
+        return new Created<>(load(userId, materialId), false);
+    }
+
     // ---------------------------------------------------------------- 조회
 
     @Transactional(readOnly = true)
@@ -126,10 +191,15 @@ public class MaterialService {
             int nextSeq = chunks.stream().mapToInt(ChunkRow::seq).max().orElse(0) + 1;
             int nextInput = (int) chunks.stream().filter(chunk -> chunk.kind().equals("input")).count() + 1;
             sources = List.of(insertChunk(materialId, material.analysisVersion(), nextSeq, "input", nextInput, evidence));
-        } else if ("text".equals(material.sourceType())) {
+        } else if ("text".equals(material.sourceType()) || totalChars(materialId, material.analysisVersion())
+                <= ConceptCandidates.MAX_CONCEPT_CHARS) {
+            // 직접 입력 자료나 짧은 파일은 자료 전체를 근거로 쓴다.
             sources = chunks.stream().map(ChunkRow::id).toList();
         } else {
-            throw ApiException.invalid("EVIDENCE_REQUIRED", "개념의 근거가 되는 원문을 고르거나 입력하세요.");
+            throw ApiException.invalid("EVIDENCE_REQUIRED", "자료가 길어서 개념의 근거가 되는 내용을 붙여 넣어야 합니다.");
+        }
+        if (sources.isEmpty()) {
+            throw ApiException.invalid("EVIDENCE_REQUIRED", "개념의 근거가 되는 내용을 붙여 넣으세요.");
         }
         Integer minSeq = jdbc.queryForObject(
                 "SELECT MIN(seq) FROM teachmi.concept WHERE material_id = ? AND analysis_version = ?",
@@ -359,6 +429,40 @@ public class MaterialService {
             return label(kind, min, max);
         }
         return String.join(", ", linked.stream().map(chunk -> label(chunk.kind(), chunk.number(), chunk.number())).toList());
+    }
+
+    private int totalChars(UUID materialId, int version) {
+        Integer total = jdbc.queryForObject("""
+                SELECT COALESCE(SUM(char_length(text)), 0) FROM teachmi.source_chunk
+                WHERE material_id = ? AND analysis_version = ?
+                """, Integer.class, materialId, version);
+        return total == null ? 0 : total;
+    }
+
+    /** 브라우저가 보낸 경로를 떼고 파일 이름만 남긴다. */
+    static String displayFileName(String fileName) {
+        String name = fileName == null ? "" : fileName.replace('\\', '/');
+        name = name.substring(name.lastIndexOf('/') + 1).replaceAll("[\\u0000-\\u001F\\u007F]", "").strip();
+        if (name.length() > 255) {
+            int dot = name.lastIndexOf('.');
+            String extension = dot > 0 && name.length() - dot <= 6 ? name.substring(dot) : "";
+            name = name.substring(0, 255 - extension.length()) + extension;
+        }
+        return name.isEmpty() ? "material" : name;
+    }
+
+    private static String stripExtension(String name) {
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        return base.length() > 200 ? base.substring(0, 200) : base;
+    }
+
+    private static String sha256(byte[] content) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private static String hash(String... parts) {
