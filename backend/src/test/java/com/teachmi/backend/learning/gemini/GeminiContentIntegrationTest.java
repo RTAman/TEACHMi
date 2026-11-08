@@ -36,6 +36,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @SpringBootTest(classes = LearningTestApplication.class, properties = {
         "teachmi.gemini.enabled=true", "teachmi.gemini.api-key=unit-test-key",
         "teachmi.gemini.model=test-model", "spring.datasource.hikari.maximum-pool-size=2",
+        // Golden v1 requests contain 2048; developer .env/output settings must not change their cache keys.
+        "teachmi.gemini.max-output-tokens=2048",
         "spring.datasource.hikari.minimum-idle=0"
 })
 @Import({GeminiConfiguration.class, GeminiContentIntegrationTest.Sources.class})
@@ -124,6 +126,8 @@ class GeminiContentIntegrationTest {
         var content=LegacyDialogueRequestsTest.content();
         for(String kind:List.of("dialogue","reteach")) {
             String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/"+kind+"-v1.json"));
+            assertThat(settings.maxOutputTokens()).as("Test output cap must match the saved legacy request")
+                    .isEqualTo(json.readTree(request).path("generationConfig").path("maxOutputTokens").asInt());
             String key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
                     ("teachmi-"+kind+"-v1\n"+settings.model()+"\n"+request).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
             ledger.claim(key,content,request.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);

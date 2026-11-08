@@ -127,6 +127,12 @@ COMMIT;
 
 `./gradlew build` 또는 Windows `.\gradlew.bat build`는 실 Google 호출을 제외합니다. 기존 B 테스트에 더해 로컬 HTTP 서버·대체 응답·실제 PostgreSQL로 출처, 오류, 한도, 롤백 후 재사용, 동시 요청, 작은 연결 풀의 교착 방지를 확인합니다.
 
+B의 `GeminiContentIntegrationTest`는 legacy 요청 fixture와 같은 출력 상한 2048을 테스트 클래스 속성으로 고정합니다. 로컬 `.env`나 환경 변수에 `GEMINI_MAX_OUTPUT_TOKENS=6144`가 있어도 이 대체 호출 테스트의 설정에는 영향을 주지 않습니다. 고정 전에는 2048 fixture로 만든 성공 원장을 6144 설정의 생성기로 조회해 캐시가 빗나가고 원장 불변성 검사가 실패했습니다. 출력 상한이 요청과 캐시 키에 포함되는 운영 동작은 그대로 유지합니다.
+
+이 설정 의존성을 비교할 때는 별도 테스트 DB에서 위 환경 변수를 2048/6144로 바꾸고 `cleanTest test --tests '*GeminiContentIntegrationTest.historicalDialogueAndReteachSuccessesAreRestoredWithoutAnotherReservation' --tests '*LegacyDialogueRequestsTest'`를 실행합니다. 각 실행에서 cleanTest(또는 --rerun-tasks)를 사용해 이전 Gradle 테스트 결과가 재사용되지 않게 합니다. 테스트는 외부 전송을 대체하며 운영 DB에서는 실행하지 않습니다.
+
+`gemini-legacy/*.json`은 실제 CR/LF 없이 직렬화한 요청입니다. 문자열 내부의 개행 이스케이프와 파일의 실제 개행은 구분해야 합니다. 캐시 테스트를 통과시키기 위해 fixture를 줄바꿈 정규화하거나 운영 키 계산에서 출력 설정을 제거하지 않습니다.
+
 전용 PostgreSQL 테스트 DB와 키·모델 환경 변수를 준비한 뒤 실 API 테스트를 별도로 실행합니다. 새 터미널에서 환경 변수를 적용하세요. 기본 build와 GitHub CI에는 실 호출이 포함되지 않습니다.
 
 ```powershell
