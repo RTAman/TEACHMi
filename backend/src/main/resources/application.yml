@@ -15,6 +15,11 @@ spring:
       ddl-auto: validate
     properties:
       hibernate.default_schema: teachmi
+  servlet:
+    multipart:
+      # 서버가 받는 상한. 자료 용량 제한(teachmi.materials.max-file-size)은 앱에서 413으로 안내한다.
+      max-file-size: 60MB
+      max-request-size: 61MB
 
 server:
   port: ${SERVER_PORT:8080}
@@ -35,6 +40,8 @@ teachmi:
     session-ttl: ${AUTH_SESSION_TTL:7d}
     login-max-failures: ${AUTH_LOGIN_MAX_FAILURES:5}
     login-failure-window: ${AUTH_LOGIN_FAILURE_WINDOW:15m}
+  materials:
+    max-file-size: ${MATERIAL_MAX_FILE_SIZE:20MB}
   gemini:
     enabled: ${GEMINI_ENABLED:false}
     api-key: ${GEMINI_API_KEY:}

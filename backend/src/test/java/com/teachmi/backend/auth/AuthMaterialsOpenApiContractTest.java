@@ -24,7 +24,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.test.web.servlet.request.AbstractMockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
@@ -33,6 +34,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
@@ -80,7 +82,7 @@ class AuthMaterialsOpenApiContractTest {
                                 .forEach(verb -> implemented.add(verb.name() + " " + path)));
                     }
                 });
-        assertThat(documented).hasSize(8).isEqualTo(implemented);
+        assertThat(documented).hasSize(9).isEqualTo(implemented);
 
         var schemas = json.readTree(Files.readString(SPEC)).path("components").path("schemas");
         String views = "com.teachmi.backend.material.MaterialViews$";
@@ -123,7 +125,33 @@ class AuthMaterialsOpenApiContractTest {
                         "evidenceText", "내용연수는 자산을 쓰는 기간이다."))), 201, true);
         exchange(withMember(patch("/api/v1/materials/" + materialId + "/concepts/" + conceptId), member, true)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"scope\":\"배분하는 이유와 기간\"}"), 200, true);
+        // 파일 업로드 202 → 분석 실패 → 재시도 202
+        var uploaded = exchangeMultipart(withMember(multipart("/api/v1/materials")
+                .file(new MockMultipartFile("file", "broken.pdf", "application/pdf", "%PDF-1.7 broken".getBytes())),
+                member, true).header("Idempotency-Key", "u1"), 202);
+        assertThat(uploaded.path("status").asText()).isEqualTo("analyzing");
+        String fileId = uploaded.path("materialId").asText();
+        assertThat(awaitAnalysis(fileId, member).path("errorCode").asText()).isEqualTo("format");
+        exchange(withMember(post("/api/v1/materials/" + fileId + "/retry"), member, true)
+                .header("Idempotency-Key", "r1"), 202, true);
+        awaitAnalysis(fileId, member);
         exchange(withMember(post("/api/v1/auth/logout"), member, true), 204, true);
+    }
+
+    @Test
+    void uploadRejectionsMatchTheContract() throws Exception {
+        signupAndReturn("upload@example.com");
+        var member = login("upload@example.com");
+        exchangeMultipart(withMember(multipart("/api/v1/materials")
+                .file(new MockMultipartFile("file", "notes.txt", "text/plain", "hello".getBytes())), member, true)
+                .header("Idempotency-Key", "t1"), 415);
+        exchangeMultipart(withMember(multipart("/api/v1/materials")
+                .file(new MockMultipartFile("file", "empty.pdf", "application/pdf", new byte[0])), member, true)
+                .header("Idempotency-Key", "t2"), 422);
+        var text = exchange(withMember(post("/api/v1/materials"), member, true).header("Idempotency-Key", "t3")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"원문\"}"), 201, true);
+        exchange(withMember(post("/api/v1/materials/" + text.path("materialId").asText() + "/retry"), member, true)
+                .header("Idempotency-Key", "t4"), 409, true);
     }
 
     @Test
@@ -186,16 +214,42 @@ class AuthMaterialsOpenApiContractTest {
         return new Member(result.getCookie("TEACHMI_SESSION"), json.readTree(result.getContentAsString()).path("csrfToken").asText());
     }
 
-    private MockHttpServletRequestBuilder withMember(MockHttpServletRequestBuilder request, Member member, boolean csrf) {
+    private <B extends AbstractMockHttpServletRequestBuilder<B>> B withMember(B request, Member member, boolean csrf) {
         request.cookie(member.cookie());
         return csrf ? request.header(AuthFilter.CSRF_HEADER, member.csrf()) : request;
+    }
+
+    /** multipart 본문은 검증기가 해석하지 못해 응답과 경로·헤더만 대조한다. */
+    private JsonNode exchangeMultipart(AbstractMockHttpServletRequestBuilder<?> builder, int status) throws Exception {
+        var result = mvc.perform(builder).andReturn();
+        var request = result.getRequest();
+        var response = result.getResponse();
+        assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(status);
+        var output = SimpleResponse.Builder.status(response.getStatus());
+        response.getHeaderNames().forEach(name -> output.withHeader(name, List.copyOf(response.getHeaders(name))));
+        if (response.getContentAsByteArray().length > 0) {
+            output.withBody(response.getContentAsByteArray());
+        }
+        assertValid(validator.validateResponse(request.getRequestURI(), Request.Method.POST, output.build()));
+        return json.readTree(response.getContentAsByteArray());
+    }
+
+    private JsonNode awaitAnalysis(String materialId, Member member) throws Exception {
+        for (int i = 0; i < 100; i++) {
+            var body = exchange(withMember(get("/api/v1/materials/" + materialId), member, false), 200, true);
+            if (!"analyzing".equals(body.path("status").asText())) {
+                return body;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("Analysis did not finish");
     }
 
     private static SimpleResponse response(int status, String body) {
         return SimpleResponse.Builder.status(status).withContentType("application/json").withBody(body).build();
     }
 
-    private JsonNode exchange(MockHttpServletRequestBuilder builder, int status, boolean validRequest) throws Exception {
+    private JsonNode exchange(AbstractMockHttpServletRequestBuilder<?> builder, int status, boolean validRequest) throws Exception {
         var result = mvc.perform(builder).andReturn();
         var request = result.getRequest();
         var response = result.getResponse();

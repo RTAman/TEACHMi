@@ -250,9 +250,9 @@
         "tags": [
           "materials"
         ],
-        "operationId": "createTextMaterial",
-        "summary": "직접 입력 자료 등록 (S02-5)",
-        "description": "본문을 저장하고 바로 status=done입니다. concept를 함께 보내면 그 개념이 자료 전체를 근거로 만들어집니다. 파일 업로드(multipart, 202)는 다음 버전에서 추가됩니다.",
+        "operationId": "createMaterial",
+        "summary": "자료 등록: 파일 업로드(S02-1) 또는 직접 입력(S02-5)",
+        "description": "multipart/form-data로 PDF·PPT·PPTX 파일(file, 선택 title)을 보내면 202와 status=analyzing을 반환하고 분석은 서버에서 계속됩니다. GET /materials/{materialId}를 2초 간격으로 조회해 done·failed를 확인합니다. 형식·용량은 업로드 즉시 415·413으로 거절합니다. application/json으로 본문(text)을 보내면 바로 status=done이고 201입니다. concept를 함께 보내면 그 개념이 자료 전체를 근거로 만들어집니다.",
         "security": [
           {
             "sessionCookie": []
@@ -280,12 +280,35 @@
                   "scope": "취득원가를 내용연수에 걸쳐 배분하는 이유"
                 }
               }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadMaterialForm"
+              }
             }
           }
         },
         "responses": {
           "201": {
-            "description": "자료 생성. 같은 키·같은 본문 재전송도 처음 결과를 201로 반환",
+            "description": "직접 입력 자료 생성. 같은 키·같은 본문 재전송도 처음 결과를 반환",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialView"
+                }
+              }
+            },
+            "headers": {
+              "Location": {
+                "description": "/api/v1/materials/{materialId}",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "파일 접수, 분석 중. 같은 키·같은 파일 재전송도 처음 결과를 반환",
             "content": {
               "application/json": {
                 "schema": {
@@ -342,8 +365,38 @@
               }
             }
           },
+          "413": {
+            "description": "파일 용량 초과, 기본 20MB (FILE_TOO_LARGE)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "PDF·PPT·PPTX가 아님 (UNSUPPORTED_FORMAT)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "422": {
-            "description": "본문 비어 있음 (TEXT_REQUIRED), 개념 이름·범위 누락 (CONCEPT_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED), 길이 초과 (INVALID_REQUEST)",
+            "description": "파일 없음 (FILE_REQUIRED), 본문 비어 있음 (TEXT_REQUIRED), 개념 이름·범위 누락 (CONCEPT_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED), 길이 초과 (INVALID_REQUEST)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "분석 큐 포화 (MATERIAL_ANALYSIS_BUSY). 변경 사항은 롤백되며 잠시 후 사용자 선택으로 같은 키·파일/본문으로 재시도",
             "content": {
               "application/json": {
                 "schema": {
@@ -396,6 +449,104 @@
           },
           "404": {
             "description": "없거나 다른 회원의 자료 (NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/materials/{materialId}/retry": {
+      "post": {
+        "tags": [
+          "materials"
+        ],
+        "operationId": "retryMaterial",
+        "summary": "분석 실패 파일 다시 시도 (S02-3)",
+        "description": "status=failed인 파일 자료만 다시 분석합니다. analysisVersion이 1 올라가고 status=analyzing이 됩니다. 이전 분석이 늦게 끝나도 새 결과만 남습니다.",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MaterialId"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "재분석 시작",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterialView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "로그인 필요 (UNAUTHENTICATED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "CSRF 토큰 누락·불일치 (CSRF_TOKEN_INVALID)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "없거나 다른 회원의 자료 (NOT_FOUND)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "실패 상태의 파일 자료가 아님 (MATERIAL_NOT_FAILED), 키 재사용 (IDEMPOTENCY_KEY_REUSED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "키 누락 (IDEMPOTENCY_KEY_REQUIRED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "분석 큐 포화 (MATERIAL_ANALYSIS_BUSY). 변경 사항은 롤백되며 잠시 후 사용자 선택으로 같은 키·파일/본문으로 재시도",
             "content": {
               "application/json": {
                 "schema": {
@@ -508,7 +659,7 @@
             }
           },
           "422": {
-            "description": "이름·범위 누락 (CONCEPT_REQUIRED), 이 자료에 없는 원문 조각 (INVALID_SOURCE), 파일 자료의 근거 누락 (EVIDENCE_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED)",
+            "description": "이름·범위 누락 (CONCEPT_REQUIRED), 이 자료에 없는 원문 조각 (INVALID_SOURCE), 파일 자료의 근거 누락 (EVIDENCE_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED), 근거 총량 15,000 UTF-16자 초과 (EVIDENCE_TOO_LARGE)",
             "content": {
               "application/json": {
                 "schema": {
@@ -826,6 +977,24 @@
               }
             ],
             "nullable": true
+          }
+        }
+      },
+      "UploadMaterialForm": {
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "description": "PDF·PPT·PPTX, 기본 20MB 이하"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "생략하면 확장자를 뺀 파일 이름"
           }
         }
       },
