@@ -6,6 +6,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
+import com.teachmi.backend.auth.ApiException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -42,30 +45,47 @@ class MaterialAnalysis {
 
     private record Job(MaterialFormat format, byte[] content) {}
 
-    /** 현재 트랜잭션이 커밋된 뒤에 분석을 시작한다. 롤백되면 시작하지 않는다. */
+    /** Reserve queue capacity before commit; the worker waits for the transaction outcome. */
     void enqueueAfterCommit(UUID materialId, int version) {
-        Runnable start = () -> executor.execute(() -> analyze(materialId, version));
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            var committed = new CompletableFuture<Boolean>();
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
-                public void afterCommit() {
-                    start.run();
+                public void afterCompletion(int status) {
+                    committed.complete(status == STATUS_COMMITTED);
                 }
             });
+            try {
+                executor.execute(() -> {
+                    if (committed.join()) {
+                        analyze(materialId, version);
+                    }
+                });
+            } catch (RejectedExecutionException rejected) {
+                // The caller is still in its transaction: material/file/key/version changes roll back.
+                throw new ApiException(503, "MATERIAL_ANALYSIS_BUSY", "자료 분석 요청이 많습니다. 잠시 후 같은 요청으로 다시 시도하세요.");
+            }
         } else {
-            start.run();
+            executor.execute(() -> analyze(materialId, version));
         }
     }
 
     /** 서버가 다시 켜지면 분석 중이던 자료를 이어서 처리한다. */
     @EventListener(ApplicationReadyEvent.class)
     void resumePending() {
-        jdbc.query("SELECT id, analysis_version FROM teachmi.material WHERE status = 'analyzing' AND source_type = 'file'",
-                rs -> {
-                    var id = rs.getObject("id", UUID.class);
-                    int version = rs.getInt("analysis_version");
-                    executor.execute(() -> analyze(id, version));
-                });
+        // Release the scan connection before saving a rejection, including with a one-connection pool.
+        record Pending(UUID id, int version) {}
+        var pending = jdbc.query("SELECT id, analysis_version FROM teachmi.material WHERE status = 'analyzing' AND source_type = 'file'",
+                (rs, row) -> new Pending(rs.getObject("id", UUID.class), rs.getInt("analysis_version")));
+        for (var job : pending) {
+            try {
+                executor.execute(() -> analyze(job.id(), job.version()));
+            } catch (RejectedExecutionException rejected) {
+                // No startup exception or permanently analyzing row; preserve the original for explicit retry.
+                log.warn("Material recovery queue full: material={} version={}", job.id(), job.version());
+                finish(job.id(), job.version(), "analysis", List.of());
+            }
+        }
     }
 
     void analyze(UUID materialId, int version) {

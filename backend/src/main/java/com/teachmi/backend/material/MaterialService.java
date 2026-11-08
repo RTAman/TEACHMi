@@ -201,6 +201,7 @@ public class MaterialService {
         if (sources.isEmpty()) {
             throw ApiException.invalid("EVIDENCE_REQUIRED", "개념의 근거가 되는 내용을 붙여 넣으세요.");
         }
+        requireSourceSize(sources);
         Integer minSeq = jdbc.queryForObject(
                 "SELECT MIN(seq) FROM teachmi.concept WHERE material_id = ? AND analysis_version = ?",
                 Integer.class, materialId, material.analysisVersion());
@@ -429,6 +430,16 @@ public class MaterialService {
             return label(kind, min, max);
         }
         return String.join(", ", linked.stream().map(chunk -> label(chunk.kind(), chunk.number(), chunk.number())).toList());
+    }
+
+    /** Match B's UTF-16 String.length limit, including supplementary Unicode characters. */
+    private void requireSourceSize(List<UUID> sources) {
+        String placeholders = String.join(",", java.util.Collections.nCopies(sources.size(), "?"));
+        long chars = jdbc.query("SELECT text FROM teachmi.source_chunk WHERE id IN (" + placeholders + ")",
+                (rs, row) -> rs.getString(1).length(), sources.toArray()).stream().mapToLong(Integer::longValue).sum();
+        if (chars > ConceptCandidates.MAX_CONCEPT_CHARS) {
+            throw ApiException.invalid("EVIDENCE_TOO_LARGE", "개념의 근거는 15,000자 이하로 선택하세요. 원문 범위를 줄여 주세요.");
+        }
     }
 
     private int totalChars(UUID materialId, int version) {

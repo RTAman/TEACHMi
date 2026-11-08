@@ -138,6 +138,7 @@ while (material.status === 'analyzing') {
 | `415 UNSUPPORTED_FORMAT` | PDF·PPT·PPTX가 아님 | PDF나 PPT 파일만 올릴 수 있어요 |
 | `413 FILE_TOO_LARGE` | 20MB 초과 | 20MB 이하 파일로 올려 주세요 |
 | `422 FILE_REQUIRED` | 빈 파일 | 파일을 선택해 주세요 |
+| `503 MATERIAL_ANALYSIS_BUSY` | 업로드/재시도 작업 큐 포화. 요청 변경은 롤백됨 | 로딩을 종료하고 "분석 요청이 많습니다. 잠시 후 다시 시도해 주세요" 표시. 자동 재전송하지 말고 사용자 선택으로 같은 키·파일/본문 재전송 |
 
 | 분석 실패 `errorCode` | 상황 | S02-3 안내와 버튼 |
 | --- | --- | --- |
@@ -207,6 +208,7 @@ const updated = await api<ConceptView>(`/materials/${materialId}/concepts/${conc
 | --- | --- |
 | `CONCEPT_REQUIRED` (422) | 개념 이름이나 범위가 비어 있음. 저장 버튼 비활성으로 미리 막아 주세요 |
 | `TEXT_REQUIRED` (422) | 자료 내용이 비어 있음 |
+| `EVIDENCE_TOO_LARGE` (422) | 개념에 연결할 근거 총량이 15,000자를 넘음. 저장되지 않았으므로 페이지 선택/근거 범위를 줄여 다시 등록 |
 | `NOT_FOUND` (404) | 없거나 다른 회원의 자료. "자료를 찾을 수 없어요" 후 홈으로 |
 | `IDEMPOTENCY_KEY_REUSED` (409) | 같은 키로 다른 내용을 보냄. 새 키로 다시 보내면 됨 |
 

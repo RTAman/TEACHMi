@@ -394,6 +394,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "분석 큐 포화 (MATERIAL_ANALYSIS_BUSY). 변경 사항은 롤백되며 잠시 후 사용자 선택으로 같은 키·파일/본문으로 재시도",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -534,6 +544,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "분석 큐 포화 (MATERIAL_ANALYSIS_BUSY). 변경 사항은 롤백되며 잠시 후 사용자 선택으로 같은 키·파일/본문으로 재시도",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -639,7 +659,7 @@
             }
           },
           "422": {
-            "description": "이름·범위 누락 (CONCEPT_REQUIRED), 이 자료에 없는 원문 조각 (INVALID_SOURCE), 파일 자료의 근거 누락 (EVIDENCE_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED)",
+            "description": "이름·범위 누락 (CONCEPT_REQUIRED), 이 자료에 없는 원문 조각 (INVALID_SOURCE), 파일 자료의 근거 누락 (EVIDENCE_REQUIRED), 키 누락 (IDEMPOTENCY_KEY_REQUIRED), 근거 총량 15,000 UTF-16자 초과 (EVIDENCE_TOO_LARGE)",
             "content": {
               "application/json": {
                 "schema": {
