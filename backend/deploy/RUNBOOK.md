@@ -90,7 +90,7 @@ Caddy는 `/api/*` 접두사를 그대로 전달하며 `/actuator/*`를 외부 40
 4. AI를 끈 상태에서 파일 분석·재시작 복구·소유권 차단·백업 복원. AI 시험은 예상 호출량을 제시해 별도 승인.
 5. 공유 요청 한도와 Google 프로젝트별 비용 알림·사용량 확인, 호스트 자원 및 백업 실패 알림.
 
-현재 로컬 회귀 검증은 A·B·C 474개, 별도 HTTP 350개다. 새 패키지 CI는 AMD64와 QEMU ARM64에서 기동·합성 PDF 분석·비슈퍼유저·프록시 경로·백업/새 DB 복원·uncertain/캐시/미채점 답안 보존을 검증한다. ARM64 에뮬레이션은 실제 도쿄 VM 성능이나 브라우저 TLS 검증을 대체하지 않는다. 기존 과거 실 Gemini 성공 이력은 재실행하지 않았으며 이번 작업의 실 호출은 0회다.
+현재 로컬 회귀 검증은 A·B·C 474개, 별도 HTTP 350개다. 새 패키지 CI는 네이티브 AMD64와 ARM64에서 기동·합성 PDF 분석·비슈퍼유저·프록시 경로·백업/새 DB 복원·uncertain/캐시/미채점 답안 보존을 검증한다. 표준 `ubuntu-24.04`와 `ubuntu-24.04-arm` 러너를 사용하며 private 저장소의 포함 사용 시간을 소비한다. [GitHub ARM64 표준 러너 안내](https://github.blog/changelog/2026-01-29-arm64-standard-runners-are-now-available-in-private-repositories/). CI는 실제 도쿄 VM 성능이나 브라우저 TLS 검증을 대체하지 않는다. 기존 과거 실 Gemini 성공 이력은 재실행하지 않았으며 이번 작업의 실 호출은 0회다.
 
 ## 백업과 새 DB 복원
 
