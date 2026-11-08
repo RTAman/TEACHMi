@@ -1,0 +1,41 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$TEACHMI_DOMAIN} {
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy same-origin
+		Strict-Transport-Security "max-age=31536000"
+	}
+	# Keep DB readiness private. Docker checks the application directly.
+	handle /actuator/* {
+		respond 404
+	}
+	handle /api/* {
+		request_body {
+			max_size 61MB
+		}
+		reverse_proxy app:8080 {
+			# Never replay a POST after a connection/provider failure.
+			lb_retries 0
+			header_up -Forwarded
+			transport http {
+				keepalive off
+				dial_timeout 5s
+				response_header_timeout 60s
+				read_timeout 65s
+				write_timeout 65s
+			}
+		}
+	}
+	# Put the separately built frontend here after browser/contract verification.
+	handle {
+		root * /srv/frontend
+		try_files {path} /index.html
+		file_server
+	}
+	# No access logging: cookies, CSRF headers, source text and answers stay out of logs.
+}

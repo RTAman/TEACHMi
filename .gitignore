@@ -1,6 +1,12 @@
 .env
 .env.*
 !.env.example
+!backend/deploy/.env.production.example
+backend/deploy/backups/
+backend/deploy/frontend/*
+!backend/deploy/frontend/.gitkeep
+**/__pycache__/
+*.pyc
 *.pem
 *.key
 **/application-local.yml

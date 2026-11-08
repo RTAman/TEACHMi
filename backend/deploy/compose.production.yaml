@@ -1,0 +1,100 @@
+name: teachmi-prod
+services:
+  db:
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: ${DB_NAME:?Set DB_NAME}
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?Set DB_ADMIN_PASSWORD}
+      TEACHMI_DB_APP_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256 --auth-local=trust
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db-init.sql:/docker-entrypoint-initdb.d/10-teachmi.sql:ro
+    networks: [data]
+    mem_limit: 1g
+    shm_size: 128m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    stop_grace_period: 60s
+  app:
+    image: ${APP_IMAGE:?Set immutable APP_IMAGE}
+    labels:
+      org.opencontainers.image.revision: ${APP_REVISION:?Set full APP_REVISION}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8080"
+      SERVER_SHUTDOWN: graceful
+      SERVER_FORWARD_HEADERS_STRATEGY: framework
+      SPRING_LIFECYCLE_TIMEOUT_PER_SHUTDOWN_PHASE: 60s
+      SPRING_CONFIG_IMPORT: optional:file:/app/no-local-env.properties
+      DB_URL: jdbc:postgresql://db:5432/${DB_NAME:?Set DB_NAME}
+      DB_USER: teachmi_app
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      AUTH_COOKIE_SAME_SITE: ${AUTH_COOKIE_SAME_SITE:-Lax}
+      AUTH_SESSION_TTL: ${AUTH_SESSION_TTL:-7d}
+      AUTH_LOGIN_MAX_FAILURES: ${AUTH_LOGIN_MAX_FAILURES:-5}
+      AUTH_LOGIN_FAILURE_WINDOW: ${AUTH_LOGIN_FAILURE_WINDOW:-15m}
+      ASSESSMENT_DEMO_ENABLED: ${ASSESSMENT_DEMO_ENABLED:-false}
+      MATERIAL_MAX_FILE_SIZE: ${MATERIAL_MAX_FILE_SIZE:-20MB}
+      GEMINI_ENABLED: ${GEMINI_ENABLED:-false}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-flash-lite}
+      GEMINI_CONNECT_TIMEOUT_SECONDS: ${GEMINI_CONNECT_TIMEOUT_SECONDS:-3}
+      GEMINI_REQUEST_TIMEOUT_SECONDS: ${GEMINI_REQUEST_TIMEOUT_SECONDS:-40}
+      GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-6144}
+      GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS: ${GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS:-2048}
+      GEMINI_REQUESTS_PER_MINUTE: ${GEMINI_REQUESTS_PER_MINUTE:-10}
+      GEMINI_REQUESTS_PER_DAY: ${GEMINI_REQUESTS_PER_DAY:-100}
+      GEMINI_MEMBER_REQUESTS_PER_DAY: ${GEMINI_MEMBER_REQUESTS_PER_DAY:-20}
+      GEMINI_MAX_ATTEMPTS: ${GEMINI_MAX_ATTEMPTS:-2}
+      GEMINI_MAX_SOURCE_CHARS: ${GEMINI_MAX_SOURCE_CHARS:-16000}
+      JAVA_TOOL_OPTIONS: -XX:MaxRAMPercentage=65 -XX:+ExitOnOutOfMemoryError -Djava.awt.headless=true
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "5"
+      LOGGING_LEVEL_ORG_HIBERNATE_ORM_JDBC_BIND: "OFF"
+    networks: [edge, data]
+    mem_limit: 2g
+    read_only: true
+    tmpfs:
+      - /tmp:size=268435456,mode=1777
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    stop_grace_period: 120s
+  proxy:
+    image: caddy:2-alpine@sha256:78bd35025c7ba85961dd149ae670315129954e77abe2383ac47c89106b35ade9
+    profiles: [public]
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      TEACHMI_DOMAIN: ${TEACHMI_DOMAIN:?Set TEACHMI_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend:/srv/frontend:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [edge]
+    mem_limit: 128m
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+networks:
+  edge:
+  data:
+    internal: true
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
