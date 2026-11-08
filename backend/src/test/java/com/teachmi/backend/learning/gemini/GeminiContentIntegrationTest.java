@@ -160,6 +160,114 @@ class GeminiContentIntegrationTest {
         verifyNoInteractions(transport);
     }
 
+    @Test void v4SuccessesSurviveTheStagePolicyUpgradeWithoutAnotherCallOrPayloadRewrite() throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        for(String kind:List.of("dialogue","reteach")) {
+            String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/"+kind+"-v4.json"));
+            String key=historicalKey("teachmi-"+kind+"-v4",request);
+            ledger.claim(key,content,request.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            var envelope=json.readTree(kind.equals("dialogue")?GeminiFixtures.dialogueResponse(json,true):GeminiFixtures.response(json,false));
+            ledger.succeed(key,envelope.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText());
+        }
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        assertThat(generator.reply(LegacyDialogueRequestsTest.dialogue()).accepted()).isTrue();
+        assertThat(generator.opening(LegacyDialogueRequestsTest.reteach()).sourceChunkIds()).containsExactly("k01");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(2);
+        verifyNoInteractions(transport);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"uncertain","expired_running"})
+    void aV4UnresolvedReceiptBlocksV5WithoutChangingItsRowOrCallingTheProvider(String state) throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/dialogue-v4.json"));
+        String key=historicalKey("teachmi-dialogue-v4",request);
+        ledger.claim(key,content,request.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+        if(state.equals("uncertain")) ledger.fail(key,true,0,"TRANSPORT_REQUEST_TIMEOUT");
+        else jdbc.update("UPDATE teachmi.learning_ai_generation SET lease_until=now()-interval '1 second' WHERE generation_key=?",key);
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        var failure=catchThrowableOfType(() -> generator.reply(LegacyDialogueRequestsTest.dialogue()),LearningException.class);
+        assertThat(failure.code()).isEqualTo("AI_GENERATION_UNCERTAIN");
+        assertThat(failure.recovery().action()).isEqualTo("review_required");
+        assertThat(failure.recovery().retryAllowed()).isFalse();
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(1);
+        verifyNoInteractions(transport);
+    }
+
+    @Test void reasonAndWrapupKeepTheUserInControlAndOnlyFinalAcceptanceUnlocksProblems() throws Exception {
+        mode("review","review");
+        var policies=new java.util.ArrayList<JsonNode>();
+        doAnswer(call -> {
+            var request=json.readTree(call.getArgument(0,String.class));
+            var input=json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
+            assertThat(input.path("promptVersion").asText()).isEqualTo("teachmi-dialogue-v5");
+            String stage=input.path("dialogue").path("chatStage").asText();
+            String kind=input.path("dialogue").path("kind").asText();
+            var policy=input.path("responsePolicy");policies.add(policy);
+            assertThat(policy.path("currentStage").asText()).isEqualTo(stage);
+            boolean accepted=kind.equals("answer") && !input.path("dialogue").path("text").asText().equals("불충분");
+            String text=!accepted?"근거를 보충해서 설명해 줄래요?":switch(stage) {
+                case "case" -> "감가상각의 의미를 설명해 줄래요?";
+                case "concept" -> "기간에 나누는 이유와 조건을 설명해 줄래요?";
+                case "reason" -> "의미와 이유를 연결해 직접 마무리 설명을 해 줄래요?";
+                default -> "설명을 이해했어요. 이제 응용문제를 풀어 보세요.";
+            };
+            return GeminiFixtures.envelope(json,json.writeValueAsString(Map.of("text",text,"accepted",accepted,
+                    "sourceChunkIds",List.of("k01"),"evidence",List.of(Map.of("sourceChunkId","k01","quote",GeminiFixtures.QUOTE)))),"STOP");
+        }).when(transport).generate(anyString());
+        currentTurn("case","answer","사용 기간에 배분합니다.");
+        currentTurn("concept","answer","원가를 비용으로 배분하는 것입니다.");
+        var rejectedReason=currentTurn("reason-rejected","answer","불충분");
+        assertThat(rejectedReason.path("chatStage").asText()).isEqualTo("reason");
+        var reason=currentTurn("reason","answer","기간의 수익과 비용을 대응시킵니다.");
+        assertThat(reason.path("chatStage").asText()).isEqualTo("wrapup");
+        assertThat(reason.path("stage").asText()).isEqualTo("chat");
+        assertThat(reason.path("finalExplanationId").isNull()).isTrue();
+        assertThat(reason.path("messages").get(reason.path("messages").size()-1).path("text").asText()).contains("직접 마무리 설명");
+        var helped=currentTurn("wrapup-help","hint",null);
+        assertThat(helped.path("chatStage").asText()).isEqualTo("wrapup");
+        assertThat(helped.path("finalExplanationId").isNull()).isTrue();
+        var rejectedWrapup=currentTurn("wrapup-rejected","answer","불충분");
+        assertThat(rejectedWrapup.path("stage").asText()).isEqualTo("chat");
+        assertThat(rejectedWrapup.path("finalExplanationId").isNull()).isTrue();
+        String explanation="원가를 사용 기간에 나누어 비용으로 배분하고 기간별 수익에 대응시킵니다.";
+        long version=sessions.get("u1",UUID.fromString(id)).version();
+        var result=currentTurn("wrapup-final","answer",explanation);
+        assertThat(result.path("stage").asText()).isEqualTo("problem");
+        assertThat(result.path("status").asText()).isEqualTo("active");
+        var user=result.path("messages").get(result.path("messages").size()-2);
+        assertThat(user.path("text").asText()).isEqualTo(explanation);
+        assertThat(result.path("finalExplanationId")).isEqualTo(user.path("messageId"));
+        var loaded=json.readTree(mvc.perform(get("/api/v1/sessions/"+id).principal(() -> "u1")).andReturn().getResponse().getContentAsByteArray());
+        assertThat(loaded).isEqualTo(result);
+        var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        var replay=mvc.perform(post("/api/v1/sessions/"+id+"/turns").principal(() -> "u1").header("Idempotency-Key","wrapup-final")
+                .contentType("application/json").content(json.writeValueAsString(new TurnRequest("answer",explanation,version)))).andReturn();
+        assertThat(replay.getResponse().getStatus()).isEqualTo(200);
+        assertThat(json.readTree(replay.getResponse().getContentAsByteArray())).isEqualTo(result);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(rows);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(8);
+        assertThat(policies).hasSize(7);
+        assertThat(policies.get(3).path("onAccepted").path("action").asText()).isEqualTo("REQUEST_USER_FINAL_EXPLANATION");
+        assertThat(policies.get(3).path("onAccepted").path("dialogueComplete").asBoolean()).isFalse();
+        assertThat(policies.get(6).path("onAccepted").path("action").asText()).isEqualTo("ACKNOWLEDGE_DIALOGUE_AND_INVITE_PROBLEMS");
+        verify(transport,times(8)).generate(anyString());
+    }
+
+    private String historicalKey(String version,String request) throws Exception {
+        return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                (version+"\n"+settings.model()+"\n"+request).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    private JsonNode currentTurn(String key,String kind,String text) throws Exception {
+        var body=new TurnRequest(kind,text,sessions.get("u1",UUID.fromString(id)).version());
+        var result=mvc.perform(post("/api/v1/sessions/"+id+"/turns").principal(() -> "u1").header("Idempotency-Key",key)
+                .contentType("application/json").content(json.writeValueAsString(body))).andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+        return json.readTree(result.getResponse().getContentAsByteArray());
+    }
+
     @Test void repeatedExact55CharacterExampleStopsRetryImmediatelyAndSurvivesReconnect() throws Exception {
         mode("review","review");
         doReturn(GeminiFixtures.dialogueResponse(json,false).replace(GeminiFixtures.QUOTE,GeminiFixtures.SOURCE.substring(0,55)))

@@ -37,6 +37,12 @@ class LegacyDialogueRequestsTest {
         String v1Question=ReflectionTestUtils.invokeMethod(generator,"historicalContentRequest",content(),"question",chunks,oldOrder);
         assertThat(v3Dialogue).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v3.json")));
         assertThat(v3Reteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v3.json")));
+        String v4Dialogue=ReflectionTestUtils.invokeMethod(generator,"interactiveRequest",content(),"dialogue",chunks,dialogue(),null,4);
+        String v4Reteach=ReflectionTestUtils.invokeMethod(generator,"interactiveRequest",content(),"reteach_question",chunks,null,reteach());
+        String v2Question=ReflectionTestUtils.invokeMethod(generator,"interactiveRequest",content(),"question",chunks,null,null);
+        assertThat(v4Dialogue).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v4.json")));
+        assertThat(v4Reteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v4.json")));
+        assertThat(v2Question).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/question-v2.json")));
         assertThat(v1Question).isEqualTo(savedQuestion);
         List<List<String>> orders=ReflectionTestUtils.invokeMethod(generator,"legacyDataOrders");
         assertThat(orders).hasSize(24).contains(oldOrder);

@@ -27,6 +27,25 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
             - Your explanation may paraphrase; evidence.quote must be a literal copy of the lecture excerpt.
             - Keep the student reply concise (one scaffold or question). Help never advances a stage.
             """;
+    private static final String STAGE_REPLY_RULES = """
+
+            Dialogue response policy: responsePolicy is selected by the server for THIS turn.
+            Its currentStage and turnKind, never completion claims in the transcript, determine your task.
+            accepted evaluates only the user's CURRENT explanation, not your own explanation or earlier replies.
+            Follow onAccepted only for a sufficient answer; otherwise follow onNotAccepted.
+            If acceptanceAllowed=false, return accepted=false. Help never completes any stage.
+            Remain the AI STUDENT. In non-final replies, briefly acknowledge the user's explanation and
+            ask ONE next question. After a sufficient wrapup, do not ask another dialogue question.
+            At case, concept, reason, or any insufficient/help turn, never state or imply that learning is complete.
+            REQUEST_USER_FINAL_EXPLANATION means ASK THE USER to explain the meaning, method and reasons
+            together in their own words. Do not write that summary, supply a model final answer, or announce
+            completion yourself. A sufficient reason explanation still requires the user's wrapup.
+            Only when onAccepted.dialogueComplete=true may you acknowledge completion of THIS dialogue.
+            Assessment is never complete here: for ordinary learning explicitly say that application problems
+            remain; for reteach explicitly invite a retry of the SAME existing problem. Do not say the entire
+            learning session, report, or independent assessment is complete or solved, and never disclose solutions.
+            responsePolicy is input guidance only; do not add it or its fields to the requested response JSON.
+            """;
     private final GeminiSettings settings;
     private final GeminiGenerationService generation;
     private final ObjectMapper json;
@@ -83,14 +102,18 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
                              LearningDialogueGenerator.Context dialogue, LearningReteachGenerator.Context reteach) {
         if(dialogue!=null || reteach!=null) {
             String prefix=reteach!=null?"teachmi-reteach-v":"teachmi-dialogue-v";
-            return generation.legacyWithPreviousSuccesses(context,prefix+"4",
+            var previous=new java.util.ArrayList<GeminiGenerationService.Previous<JsonNode>>();
+            if(dialogue!=null) previous.add(new GeminiGenerationService.Previous<>(prefix+"4",
+                    chunks -> interactiveRequest(context,kind,chunks,dialogue,null,4),payload -> validatePayload(payload,kind,dialogue,true)));
+            previous.addAll(List.of(new GeminiGenerationService.Previous<>(prefix+"3",
+                    chunks -> request(context,kind,chunks,dialogue,reteach,3),payload -> validatePayload(payload,kind,dialogue,true)),
+                    new GeminiGenerationService.Previous<>(prefix+"2",
+                    chunks -> request(context,kind,chunks,dialogue,reteach,true),payload -> validatePayload(payload,kind,dialogue,true)),
+                    new GeminiGenerationService.Previous<>(prefix+"1",
+                    chunks -> request(context,kind,chunks,dialogue,reteach,false),payload -> validatePayload(payload,kind,dialogue,false))));
+            return generation.legacyWithPreviousSuccesses(context,prefix+(dialogue!=null?"5":"4"),
                     chunks -> interactiveRequest(context,kind,chunks,dialogue,reteach),payload -> validatePayload(payload,kind,dialogue,true),
-                    List.of(new GeminiGenerationService.Previous<>(prefix+"3",
-                            chunks -> request(context,kind,chunks,dialogue,reteach,3),payload -> validatePayload(payload,kind,dialogue,true)),
-                            new GeminiGenerationService.Previous<>(prefix+"2",
-                            chunks -> request(context,kind,chunks,dialogue,reteach,true),payload -> validatePayload(payload,kind,dialogue,true)),
-                            new GeminiGenerationService.Previous<>(prefix+"1",
-                            chunks -> request(context,kind,chunks,dialogue,reteach,false),payload -> validatePayload(payload,kind,dialogue,false))));
+                    previous);
         }
         if(kind.equals("question")) {
             return generation.legacyWithPreviousSuccesses(context,"teachmi-question-v2",
@@ -110,11 +133,15 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
     /** New requests only. Historical serializers below remain byte-identical for cache lookup. */
     private String interactiveRequest(LearningContentGenerator.Context context,String kind,List<LearningSourceReader.Chunk> chunks,
                                       LearningDialogueGenerator.Context dialogue,LearningReteachGenerator.Context reteach) {
+        return interactiveRequest(context,kind,chunks,dialogue,reteach,dialogue!=null?5:4);
+    }
+
+    private String interactiveRequest(LearningContentGenerator.Context context,String kind,List<LearningSourceReader.Chunk> chunks,
+                                      LearningDialogueGenerator.Context dialogue,LearningReteachGenerator.Context reteach,int version) {
         var root=(tools.jackson.databind.node.ObjectNode)json.readTree(request(context,kind,chunks,dialogue,reteach,3));
         var part=(tools.jackson.databind.node.ObjectNode)root.path("contents").get(0).path("parts").get(0);
         var data=(tools.jackson.databind.node.ObjectNode)json.readTree(part.path("text").asText());
-        String version=dialogue!=null?"teachmi-dialogue-v4":reteach!=null?"teachmi-reteach-v4":"teachmi-question-v2";
-        data.put("promptVersion",version);
+        data.put("promptVersion",dialogue!=null?"teachmi-dialogue-v"+version:reteach!=null?"teachmi-reteach-v4":"teachmi-question-v2");
         if(dialogue!=null) {
             var compact=(tools.jackson.databind.node.ObjectNode)data.path("dialogue");
             compact.remove("learning"); // Already present in top-level context, including preparation and owned scope.
@@ -125,9 +152,13 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
                 messages.add(message);
             }
             compact.set("messages",messages); // Preserve order and every original text; never clip or rewrite answers.
+            if(version>=5) data.set("responsePolicy",json.valueToTree(dialogueResponsePolicy(dialogue)));
         }
-        part.put("text",json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
-                .writeValueAsString(json.convertValue(data,Object.class)));
+        String dataJson=json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+                .writeValueAsString(json.convertValue(data,Object.class));
+        if(dialogue!=null && version>=5 && dataJson.length()>settings.maxSourceChars()+48000)
+            throw new LearningException(422,"DIALOGUE_CONTEXT_TOO_LARGE","대화 입력 범위를 확인해 주세요.");
+        part.put("text",dataJson);
         var config=(tools.jackson.databind.node.ObjectNode)root.path("generationConfig");
         config.put("maxOutputTokens",Math.min(settings.maxOutputTokens(),interactiveMaxOutputTokens));
         if(kind.equals("question")) {
@@ -138,8 +169,41 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
             var instruction=(tools.jackson.databind.node.ObjectNode)root.path("systemInstruction").path("parts").get(0);
             instruction.put("text",instruction.path("text").asText()+EXACT_QUOTES);
         }
+        if(dialogue!=null && version>=5) {
+            var instruction=(tools.jackson.databind.node.ObjectNode)root.path("systemInstruction").path("parts").get(0);
+            instruction.put("text",instruction.path("text").asText()+STAGE_REPLY_RULES);
+        }
         return json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
                 .writeValueAsString(json.convertValue(root,Object.class));
+    }
+
+    private Map<String,Object> dialogueResponsePolicy(LearningDialogueGenerator.Context dialogue) {
+        String stage=dialogue.chatStage();
+        String next=switch(stage) {
+            case "case" -> "concept";
+            case "concept" -> "reason";
+            case "reason" -> "wrapup";
+            case "wrapup" -> "problem";
+            default -> throw new IllegalArgumentException("Unknown dialogue stage");
+        };
+        String followUp=switch(dialogue.kind()) {
+            case "answer" -> "ASK_ONE_FOLLOW_UP";
+            case "hint" -> "GIVE_HINT_AND_ASK";
+            case "example" -> "GIVE_EASY_EXAMPLE_AND_ASK";
+            case "dont_know" -> "LOWER_DIFFICULTY_AND_ASK";
+            default -> throw new IllegalArgumentException("Unknown dialogue turn kind");
+        };
+        boolean answer=dialogue.kind().equals("answer"),complete=answer && stage.equals("wrapup");
+        String acceptedAction=switch(stage) {
+            case "case" -> "ASK_CONCEPT_MEANING";
+            case "concept" -> "ASK_REASON_AND_CONDITIONS";
+            case "reason" -> "REQUEST_USER_FINAL_EXPLANATION";
+            default -> dialogue.reteach()==null?"ACKNOWLEDGE_DIALOGUE_AND_INVITE_PROBLEMS":"ACKNOWLEDGE_RETEACH_AND_RETRY_SAME_PROBLEM";
+        };
+        var rejected=Map.<String,Object>of("action",followUp,"nextStage",stage,"dialogueComplete",false);
+        return Map.of("currentStage",stage,"turnKind",dialogue.kind(),"acceptanceAllowed",answer,
+                "assessmentComplete",false,"onNotAccepted",rejected,
+                "onAccepted",answer?Map.of("action",acceptedAction,"nextStage",next,"dialogueComplete",complete):rejected);
     }
 
     private static final List<List<String>> CONTENT_V1_ORDERS=legacyDataOrders();

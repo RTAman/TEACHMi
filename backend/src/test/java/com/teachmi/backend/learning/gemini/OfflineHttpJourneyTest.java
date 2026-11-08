@@ -460,6 +460,19 @@ class OfflineHttpJourneyTest {
             check("C keeps the configured global output budget",gateway.audit.stream()
                     .filter(row -> row.get("operation").toString().startsWith("assessment/"))
                     .allMatch(row -> row.get("maxOutputTokens").equals(6144)));
+            var dialogueRequests=gateway.audit.stream().filter(row -> row.get("operation").equals("dialogue")).toList();
+            check("B dialogue uses the stage aware v5 policy",!dialogueRequests.isEmpty() && dialogueRequests.stream()
+                    .allMatch(row -> row.get("promptVersion").equals("teachmi-dialogue-v5")));
+            var reasons=dialogueRequests.stream().filter(row -> row.get("chatStage").equals("reason") && row.get("turnKind").equals("answer")).toList();
+            check("reason asks for the user final explanation without completion",!reasons.isEmpty() && reasons.stream()
+                    .allMatch(row -> row.get("responseAction").equals("REQUEST_USER_FINAL_EXPLANATION") && row.get("dialogueComplete").equals(false)));
+            var endings=dialogueRequests.stream().filter(row -> row.get("chatStage").equals("wrapup") && row.get("turnKind").equals("answer")).toList();
+            check("wrapup routes ordinary learning to problems and reteach to the same problem",!endings.isEmpty() && endings.stream()
+                    .allMatch(row -> row.get("responseAction").equals(row.get("reteach").equals(true)
+                            ?"ACKNOWLEDGE_RETEACH_AND_RETRY_SAME_PROBLEM":"ACKNOWLEDGE_DIALOGUE_AND_INVITE_PROBLEMS")));
+            check("help cannot acknowledge dialogue completion",dialogueRequests.stream().filter(row -> !row.get("turnKind").equals("answer"))
+                    .allMatch(row -> row.get("dialogueComplete").equals(false)));
+            check("B dialogue never declares assessment completed",dialogueRequests.stream().allMatch(row -> row.get("assessmentComplete").equals(false)));
             verifySavedCitations();
             var flyway=app.getBean(org.flywaydb.core.Flyway.class);
             check("Flyway valid with no pending migrations",flyway.validateWithResult().validationSuccessful && flyway.info().pending().length==0);
