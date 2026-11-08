@@ -81,6 +81,8 @@ B의 AI 오류와 세션 GET에는 선택적 `recovery`가 추가됩니다. 기�
 
 ### 로딩과 확인 대기 구분
 
+같은 생성 요청의 마지막 허용 시도가 502 검증 실패로 끝나면 그 응답에서 바로 `recovery.action=limit_reached`, `retryAllowed=false`를 반환합니다. 바깥의 `INVALID_GEMINI_RESPONSE`와 구체 인용 진단은 유지하고, 대화/재설명 보류에는 `AI_ATTEMPT_LIMIT`를 저장합니다. 재접속 GET도 wait/limit_reached로 복원하며, UI는 다음 POST를 보내 한도를 확인할 필요가 없습니다.
+
 `availableActions=["wait"]`만 보고 스피너를 켜거나 폴링하지 마세요. 호환성을 위해 유지한 동작 이름이며 **자동으로 완료되지 않는 보류**에도 사용됩니다. 실패한 대화는 pendingTurn.errorCode, 재설명 시작은 activeReteach.errorCode를 함께 봅니다. 오류 응답의 code와 recovery, 재접속 GET의 recovery가 우선입니다.
 
 | 조건 | 화면과 안내 | 폴링·재호출 |
@@ -94,6 +96,10 @@ B의 AI 오류와 세션 GET에는 선택적 `recovery`가 추가됩니다. 기�
 폴링 상한이 끝나면 "처리가 지연되고 있습니다. 저장된 내용을 확인해 주세요."를 표시하고 자동 조회를 종료합니다. 조회 종료는 공급자 호출 취소나 미과금 판정을 뜻하지 않습니다. 직접 누르는 상태 확인 GET은 허용하되, 자동 타이머를 다시 시작하거나 생성 POST로 바꾸지 않습니다.
 
 구버전 서버/영수증에 recovery가 없더라도 두 터미널 오류 코드를 먼저 분기합니다. 재접속 GET은 저장된 오류 코드에서 review_required/limit_reached를 복원하며, generating처럼 보이는 오래된 힌트보다 이 오류가 우선합니다. 사용자에게는 원문·키·내부 원장 SQL을 노출하지 말고 학습 기록 보기·지원 문의를 제공합니다. [운영자 확인 절차](GEMINI_CONTENT.md#운영자-확인과-안전한-조치)를 따르며, 현재 API는 uncertain 영수증을 해제하거나 pending 답변에 결과를 강제로 붙이는 기능을 제공하지 않습니다.
+
+활성 학습의 GET과 /active는 현재 회원·학습의 미확인 원장도 읽기 전용으로 확인합니다. 모드 선택·처음 질문·C 생성 등 pendingTurn이 없는 단계의 uncertain 및 임대가 만료된 running도 review_required·wait로 복원합니다. 생성 설정이 꺼져 있어도 기존 보류를 숨기지 않습니다. 진행 중 running은 retryAllowed=false인 wait 안내만 제공하며 자동 재전송을 허용하지 않습니다. 성공/일반 실패 영수증은 이 조회로 세션 전체를 차단하지 않고, 완료 이력의 응답은 유지합니다.
+
+멱등 재전송은 과거 성공 응답을 반환할 수 있으므로 재접속 진행 화면은 최신 GET을 사용합니다. C 오류 응답에 recovery가 없더라도 AI_GENERATION_UNCERTAIN·AI_ATTEMPT_LIMIT 코드에서 먼저 로딩과 자동 재전송을 멈춥니다. 최신 GET으로 보류를 확인할 수 있으며 원장을 초기화하거나 키·모델·새 학습으로 우회하지 않습니다.
 
 120초 실행 임대가 만료되면 interrupted 상태로 표시하고 같은 전송을 새 실행 토큰으로 이어갈 수 있습니다. 이전 작업자는 토큰이 바뀐 뒤 응답을 저장할 수 없습니다. Gemini의 처리 여부가 불명확한 기록은 기존 호출 기록 정책에 따라 자동 재호출이 보류됩니다. [Gemini 재시도 정책](GEMINI_CONTENT.md)
 

@@ -243,6 +243,17 @@ class GeminiCommonPortIntegrationTest {
         assertThat(generate(request)).isEqualTo("원가 배분");
         assertThat(calls()).isEqualTo(2);
     }
+    @Test void typedDomainDiagnosticsReachRecoveryAndTheLedgerWithoutPrivateMessages() {
+        var exception=catchThrowableOfType(() -> port.generate(request("assessment/problems"),node -> {
+            throw new com.teachmi.backend.ai.GeminiValidationException(
+                    com.teachmi.backend.ai.GeminiValidationException.Diagnostic.EVIDENCE_QUOTE_TOO_LONG,"private domain details");
+        }),LearningException.class);
+        assertThat(exception.code()).isEqualTo("INVALID_GEMINI_RESPONSE");
+        assertThat(exception.recovery().diagnosticCode()).isEqualTo("EVIDENCE_QUOTE_TOO_LONG");
+        assertThat(exception.getMessage()).doesNotContain("private domain details");
+        assertThat(jdbc.queryForObject("SELECT last_error_code FROM teachmi.learning_ai_generation",String.class)).isEqualTo("EVIDENCE_QUOTE_TOO_LONG");
+    }
+
     @Test void timeoutsAreUncertainAndNeverAutomaticallySentAgain() {
         doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0)).when(transport).generate(anyString());
         var request=request("assessment/problems");
@@ -281,6 +292,27 @@ class GeminiCommonPortIntegrationTest {
         assertThat(calls()).isEqualTo(1);
         verify(transport).generate(anyString());
     }
+    @Test void failureStatusReadFailureStopsWithAnExistingApiStageAndSafeDiagnostic() throws Exception {
+        var broken=mock(GeminiLedger.class);
+        doAnswer(call -> ledger.claim(call.getArgument(0),call.getArgument(1,String.class),
+                call.getArgument(2),call.getArgument(3))).when(broken).claim(anyString(),anyString(),any(),anyInt());
+        doAnswer(call -> {ledger.fail(call.getArgument(0),call.getArgument(1),call.getArgument(2),call.getArgument(3));return null;})
+                .when(broken).fail(anyString(),anyBoolean(),anyInt(),anyString());
+        doThrow(new IllegalStateException("private status read failure")).when(broken).failedAtLimit(anyString());
+        doReturn("invalid response").when(transport).generate(anyString());
+        var failure=catchThrowableOfType(() -> scoped(settings,broken).generate(request("assessment/problems"),node -> node),LearningException.class);
+        assertThat(failure.code()).isEqualTo("AI_GENERATION_UNCERTAIN");
+        assertThat(failure.recovery().action()).isEqualTo("review_required");
+        assertThat(failure.recovery().retryAllowed()).isFalse();
+        assertThat(failure.recovery().diagnosticCode()).isEqualTo("LEDGER_FAILURE_STATUS_READ_FAILED");
+        var schema=json.readTree(java.nio.file.Files.readString(java.nio.file.Path.of("api/openapi.json")));
+        var stages=schema.path("components").path("schemas").path("GenerationRecovery").path("properties").path("stage").path("enum");
+        assertThat(json.convertValue(stages,java.util.List.class)).contains(failure.recovery().stage());
+        assertThat(jdbc.queryForObject("SELECT state FROM teachmi.learning_ai_generation",String.class)).isEqualTo("failed");
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
     @Test void retryAfterAndAttemptLimitsStillApplyToThePublicPort() {
         var request=request("assessment/problems");
         doThrow(new GeminiCallFailure(false,429,"GEMINI_RATE_LIMITED",60)).when(transport).generate(anyString());

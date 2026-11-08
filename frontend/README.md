@@ -4,7 +4,7 @@
 
 첫 화면을 붙일 때에는 [백엔드 담당표](../backend/)에서 해당 담당자를 확인합니다. 로그인·업로드 상태는 A, 학습 재개와 메시지는 B, 홈·채점·리포트는 C와 요청·응답 예시를 맞춥니다. 로딩·빈 결과·오류 화면은 해당 작업 이슈에 Figma 노드와 함께 기록합니다.
 
-B 연결은 [HTTP 명세·실행 예시·인계 안내](../backend/API_HANDOFF.md)와 [OpenAPI JSON](../backend/api/openapi.json)을 사용합니다. A의 로그인 쿠키·CSRF와 직접 입력 자료·원문은 연결됐으며 파일 업로드/분석과 C 문항·평가 어댑터는 후속 작업입니다.
+B 연결은 [HTTP 명세·실행 예시·인계 안내](../backend/API_HANDOFF.md)와 [OpenAPI JSON](../backend/api/openapi.json)을 사용합니다. A의 로그인 쿠키·CSRF·직접 입력·PDF/PPT/PPTX 분석, B 학습/대화와 C v4 문항·채점·리포트가 백엔드에 연결돼 있습니다. [통합 검증 기록](../backend/INTEGRATION_READINESS.md)의 실 모델 미검증 범위도 함께 확인하세요.
 
 ## B AI 복구 화면 규칙
 

@@ -26,7 +26,7 @@ public class LearningTurnService {
             var reply = java.util.Objects.requireNonNull(generator.reply(claim.context()));
             return transactions.complete(claim, reply);
         } catch (LearningException ex) {
-            var current = transactions.fail(claim, ex.code());
+            var current = transactions.fail(claim, ex.storedErrorCode());
             throw ex.withSession(current);
         } catch (RuntimeException ex) {
             var current = transactions.fail(claim, "DIALOGUE_GENERATION_FAILED");

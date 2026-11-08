@@ -3,12 +3,11 @@
 Gemini 어댑터는 기존 `LearningContentGenerator`를 구현합니다. 기존 모드 선택·설명 시작 API의 요청과 응답 형식을 사용하고 요약과 첫 질문을 DB에 저장합니다. GET과 성공 요청의 재전송은 저장한 내용을 돌려줍니다.
 
 B와 향후 소비자가 공유할 Java 호출 계약은 [공통 Gemini 포트](COMMON_GEMINI_PORT.md)의 GeminiGenerationPort입니다.
-기존 B 생성기는 같은 실행 엔진·원문/출처 검증·V4 사용량 원장을 사용하며, 기존 프롬프트와 생성 키를 유지합니다.
-C의 ProblemGenerator·AnswerGrader 연결은 이 작업에 포함하지 않습니다.
+기존 B 생성기와 C 문제 생성·채점은 같은 실행 엔진·원문/출처 검증·V4 사용량 원장을 사용합니다. B 대화/재설명의 새 요청은 v3이고, 기존 v1·v2 성공 영수증과 생성 키 계산은 유지합니다.
 
 ## A 원문 연결
 
-A의 `MaterialLearningSources`가 `LearningSourceReader`를 구현합니다. 직접 입력 자료에서 회원의 소유권, 개념과 자료의 관계, 요청한 원문 조각의 소속을 검증한 뒤 실제 텍스트를 반환합니다. 파일 업로드·분석은 후속 작업이며, A의 인증·자료 사용 방법은 [연동 계약](AUTH_MATERIALS.md)을 참고하세요.
+A의 `MaterialLearningSources`가 `LearningSourceReader`를 구현합니다. 직접 입력 및 PDF/PPT/PPTX 분석 자료에서 회원의 소유권, 개념과 자료의 관계, 요청한 원문 조각의 소속을 검증한 뒤 실제 텍스트를 반환합니다. A의 인증·자료 사용 방법은 [연동 계약](AUTH_MATERIALS.md)을 참고하세요.
 
 `OwnedSource(memberId, materialId, conceptId, chunks)`의 회원·자료·개념은 요청과 일치해야 합니다. 각 Chunk에는 고유 ID와 비어 있지 않은 원문을 넣습니다. ID 집합은 세션 생성 시 `ConceptSource`가 제공한 출처 ID와 정확히 일치해야 합니다. 없거나 타인 소유인 자료는 `LearningException.notFound()`를 던집니다.
 
@@ -56,17 +55,25 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 
 `last_error_code`는 고정된 진단 코드만 기록합니다. 키·프롬프트·원문·원본 오류 본문·예외 메시지는 로그에 남기지 않습니다. 검증한 응답과 근거 인용문은 접근이 제한된 내부 DB 기록에 저장합니다. Google generateContent는 이 생성 키의 원격 멱등성을 보장하지 않으므로, 수신 결과를 모를 때는 운영 확인으로 중복 과금 위험을 줄입니다.
 
-B 대화·재설명 첫 질문은 `teachmi-dialogue-v2`·`teachmi-reteach-v2`를 사용합니다. 출처 1~2개와 ID당 정확히 하나의 인용, 원문에서 연속된 6~40자 그대로 복사를 요청하고 서버에서도 제한합니다. 띄어쓰기나 수식 기호를 보정해서 인용을 통과시키지 않습니다. 요약·최초 사례 질문의 v1 요청과 기존 성공 영수증은 유지하며, 동일 입력·모델·출력 설정의 이전 대화/재설명 성공 캐시도 현재 원문으로 재검증하여 추가 호출 없이 복원합니다.
+B 대화·재설명 첫 질문은 `teachmi-dialogue-v3`·`teachmi-reteach-v3`를 사용합니다. 허가된 원문에서 연속된 6~40자 후보를 결정적으로 만들고 `citationCandidates`와 quote enum으로 제공합니다. 후보는 기존 요청 크기 상한 안에서 청크당 최대 8개/전체 최대 64개이며, 원문과 응답을 사후 보정하지 않습니다. 출처 1~2개·ID당 인용 1개·정확한 부분 문자열·6~40자 서버 검증은 유지합니다.
+
+[Google generateContent의 responseJsonSchema 지원 목록](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig)에는 enum이 포함되지만 문자열 maxLength는 포함되지 않습니다. 따라서 maxLength 지시만으로 모델의 길이 준수를 보장하지 않고 짧은 후보 선택과 서버 검증을 함께 사용합니다. 실 모델의 생성 품질 개선은 승인된 별도 시험으로 확인해야 합니다.
+
+요약·최초 사례 질문의 v1 요청은 유지합니다. 새 v3 성공 → 동일 입력의 v2 성공 → v1 성공 순서로 현재 원문을 재검증하고 추가 호출 없이 복원합니다. 과거 요청 JSON은 바이트 그대로 재구성하며 성공/uncertain 원장·시도 수를 변경하지 않습니다. 원문/설정이 바뀐 요청도 기존 uncertain을 우회하지 못합니다.
+
+같은 요청의 마지막 허용 시도가 검증 실패하면 502 코드와 구체 진단을 유지하면서 즉시 `retryAllowed=false`, `action=limit_reached`를 반환합니다. 대화·재설명에는 `AI_ATTEMPT_LIMIT` 보류를 저장해 GET에서도 복원하므로 추가 POST로 한도를 확인할 필요가 없습니다. 다른 해시의 과거 일반 실패만으로 세션 전체를 차단하지 않습니다.
 
 | 안전한 진단 | 의미 |
 | --- | --- |
 | CITATION_ID_INVALID / CITATION_ID_DUPLICATE | 출처 ID 오류 |
 | EVIDENCE_QUOTE_NOT_EXACT | 원문과 인용 불일치 |
+| EVIDENCE_QUOTE_TOO_SHORT / EVIDENCE_QUOTE_TOO_LONG | 인용 길이 위반; C CitationRules도 같은 고정 코드를 전달 |
 | JSON_SCHEMA_INVALID / CONTENT_JSON_INVALID | 응답 계약 / JSON 문법 오류 |
 | RESPONSE_MAX_TOKENS | 후보 응답 잘림 |
 | TRANSPORT_CONNECT_TIMEOUT / TRANSPORT_REQUEST_TIMEOUT | 연결 / 요청 시간 초과 |
 | UPSTREAM_HTTP_5xx / TRANSPORT_IO_FAILURE | 공급자 HTTP 오류 / 통신 중단 |
 | LEDGER_SUCCESS_WRITE_FAILED / LEDGER_FAILURE_WRITE_FAILED | 성공 / 실패 영수증 저장 확인 필요 |
+| LEDGER_FAILURE_STATUS_READ_FAILED | 실패 후 시도 상태 확인 불가; 자동 재시도 없이 확인 필요 |
 
 진단 단계는 TRANSPORT, RESPONSE_VALIDATION, CACHE_VALIDATION, LEDGER_CLAIM, LEDGER_SUCCESS_WRITE, LEDGER_FAILURE_WRITE로 구분합니다. 영수증 저장 실패는 running으로 남을 수 있으며 임대 만료 후에도 자동 인계하지 않습니다. 기존 `TRANSPORT_HttpTimeoutException` 기록은 읽을 때만 새 진단으로 매핑하고 원본 기록은 변경하지 않습니다. 모델·출력 설정·프롬프트를 변경해 생성 키가 달라져도 같은 학습의 미확인/진행 중 호출을 우회하지 못합니다. [오류 복구 응답](CONVERSATION_TURNS.md)의 review_required는 원장/사용량 확인이 필요하다는 뜻이며, 자동 재시도나 DB 초기화를 의미하지 않습니다.
 
@@ -89,6 +96,8 @@ B 대화·재설명 첫 질문은 `teachmi-dialogue-v2`·`teachmi-reteach-v2`를
 ## 운영자 확인과 안전한 조치
 
 `availableActions=["wait"]`는 기존 API의 작업 차단 표시입니다. 무조건 처리 중이라는 뜻이 아닙니다. `AI_GENERATION_UNCERTAIN`/`review_required`와 `AI_ATTEMPT_LIMIT`/`limit_reached`에서는 로딩·자동 폴링·자동 POST를 종료하고 저장된 입력과 확인 안내를 보여줍니다. 재접속 GET의 선택적 recovery에도 같은 규칙을 적용합니다. 세부 화면 규칙은 [대화 API](CONVERSATION_TURNS.md#로딩과-확인-대기-구분)를 따릅니다.
+
+세션 GET의 LearningGenerationRecoverySource는 원장을 읽기만 합니다. pendingTurn이 없는 모드/첫 질문/C 생성의 uncertain과 만료된 running도 복원하며, 소유권 확인 뒤 현재 회원·학습으로 조회 범위를 제한합니다. Gemini 비활성화도 기존 보류를 해제하지 않습니다. 캐시 키, 임대, 시도 수, 원장 상태와 세션 버전을 변경하거나 공급자 호출을 예약하지 않습니다.
 
 1. 지원 건에 회원·세션 식별자, UTC 발생 시각, 오류 코드, recovery.stage/diagnosticCode, 앱 배포 버전과 모델·타임아웃·출력 상한을 기록합니다. 키, 원문, 대화 본문과 AI 응답 전문은 지원 티켓이나 GitHub에 복사하지 않습니다. 회원 소유권을 확인하고 접근 권한이 있는 운영자가 해당 DB를 읽기 전용으로 조회합니다.
 2. 해당 회원·세션의 생성 상태·시도 수·마지막 진단·임대 시각과 호출 예약을 비교합니다. 아래 SQL은 바인딩 변수를 쓰는 읽기 전용 템플릿입니다. 운영 도구에서 실제 값을 바인딩하며 원문/content_json은 선택하지 않습니다. 운영 DB를 테스트 DB로 사용하거나 다른 회원의 기록을 넓게 조회하지 않습니다.

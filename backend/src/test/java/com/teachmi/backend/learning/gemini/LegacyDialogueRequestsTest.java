@@ -29,6 +29,9 @@ class LegacyDialogueRequestsTest {
         assertThat(oldDialogue).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v1.json")));
         assertThat(oldReteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v1.json")));
         String updated=ReflectionTestUtils.invokeMethod(generator,"request",content(),"dialogue",chunks,dialogue(),null,true);
+        String v2Reteach=ReflectionTestUtils.invokeMethod(generator,"request",content(),"reteach_question",chunks,null,reteach(),true);
+        assertThat(updated).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v2.json")));
+        assertThat(v2Reteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v2.json")));
         var request=json.readTree(updated);var schema=request.path("generationConfig").path("responseJsonSchema").path("properties");
         assertThat(schema.path("sourceChunkIds").path("maxItems").asInt()).isEqualTo(1);
         assertThat(schema.path("evidence").path("items").path("properties").path("quote").path("maxLength").asInt()).isEqualTo(40);

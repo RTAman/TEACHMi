@@ -142,6 +142,47 @@ class GeminiContentIntegrationTest {
         verifyNoInteractions(transport);
     }
 
+    @Test void v2SuccessesAreRestoredByV3WithoutQuotaReservationOrRewritingRows() throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        for(String kind:List.of("dialogue","reteach")) {
+            String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/"+kind+"-v2.json"));
+            String key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                    ("teachmi-"+kind+"-v2\n"+settings.model()+"\n"+request).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            ledger.claim(key,content,request.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            var envelope=json.readTree(kind.equals("dialogue")?GeminiFixtures.dialogueResponse(json,true):GeminiFixtures.response(json,false));
+            ledger.succeed(key,envelope.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText());
+        }
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        assertThat(generator.reply(LegacyDialogueRequestsTest.dialogue()).accepted()).isTrue();
+        assertThat(generator.opening(LegacyDialogueRequestsTest.reteach()).sourceChunkIds()).containsExactly("k01");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(2);
+        verifyNoInteractions(transport);
+    }
+
+    @Test void repeatedExact55CharacterExampleStopsRetryImmediatelyAndSurvivesReconnect() throws Exception {
+        mode("review","review");
+        doReturn(GeminiFixtures.dialogueResponse(json,false).replace(GeminiFixtures.QUOTE,GeminiFixtures.SOURCE.substring(0,55)))
+                .when(transport).generate(anyString());
+        var first=turn("long-example","example",null).getResponse();
+        assertThat(first.getStatus()).isEqualTo(502);
+        assertThat(json.readTree(first.getContentAsByteArray()).path("recovery").path("retryAllowed").asBoolean()).isTrue();
+        var second=turn("long-example","example",null).getResponse();
+        assertThat(second.getStatus()).isEqualTo(502);
+        var recovery=json.readTree(second.getContentAsByteArray()).path("recovery");
+        assertThat(recovery.path("diagnosticCode").asText()).isEqualTo("EVIDENCE_QUOTE_TOO_LONG");
+        assertThat(recovery.path("retryAllowed").asBoolean()).isFalse();
+        assertThat(recovery.path("action").asText()).isEqualTo("limit_reached");
+        var restored=sessions.get("u1",UUID.fromString(id));
+        assertThat(restored.pendingTurn().errorCode()).isEqualTo("AI_ATTEMPT_LIMIT");
+        assertThat(restored.availableActions()).containsExactly("wait");
+        assertThat(restored.recovery().action()).isEqualTo("limit_reached");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        assertThat(turn("long-example","example",null).getResponse().getStatus()).isEqualTo(429);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        verify(transport,times(3)).generate(anyString());
+    }
+
     @Test
     void geminiReplyUsesSavedUserInputAndAdvancesTheServerStage() throws Exception {
         mode("review", "review");
@@ -240,7 +281,10 @@ class GeminiContentIntegrationTest {
         mode("review","review");
         doReturn("invalid response").when(transport).generate(anyString());
         assertThat(turn("limited","answer","보존할 입력").getResponse().getStatus()).isEqualTo(502);
-        assertThat(turn("limited","answer","보존할 입력").getResponse().getStatus()).isEqualTo(502);
+        var second=turn("limited","answer","보존할 입력").getResponse();
+        assertThat(second.getStatus()).isEqualTo(502);
+        assertThat(json.readTree(second.getContentAsByteArray()).path("recovery").path("action").asText()).isEqualTo("limit_reached");
+        assertThat(sessions.get("u1",UUID.fromString(id)).recovery().action()).isEqualTo("limit_reached");
         var limited=turn("limited","answer","보존할 입력").getResponse();
         assertThat(limited.getStatus()).isEqualTo(429);
         var body=json.readTree(limited.getContentAsByteArray());
@@ -265,7 +309,10 @@ class GeminiContentIntegrationTest {
         var request=post("/api/v1/sessions/"+id+"/reteach").principal(() -> "u1").header("Idempotency-Key","limited-reteach")
                 .contentType("application/json").content("{\"problemId\":\"p01\",\"attemptId\":\"a01\",\"expectedVersion\":1}");
         assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(502);
-        assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(502);
+        var second=mvc.perform(request).andReturn().getResponse();
+        assertThat(second.getStatus()).isEqualTo(502);
+        assertThat(json.readTree(second.getContentAsByteArray()).path("recovery").path("action").asText()).isEqualTo("limit_reached");
+        assertThat(sessions.get("u1",UUID.fromString(id)).recovery().action()).isEqualTo("limit_reached");
         var limited=mvc.perform(request).andReturn().getResponse();
         assertThat(limited.getStatus()).isEqualTo(429);
         assertThat(json.readTree(limited.getContentAsByteArray()).path("recovery").path("action").asText()).isEqualTo("limit_reached");
