@@ -1,0 +1,19 @@
+# CI-only overlay. Never applied to an existing production Compose project.
+services:
+  app:
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.1
+    restart: "no"
+    environment:
+      GEMINI_ENABLED: "false"
+      GEMINI_API_KEY: ""
+      JAVA_TOOL_OPTIONS: >-
+        -XX:MaxRAM=512m -XX:ActiveProcessorCount=1 -XX:+UseSerialGC
+        -Xms32m -Xmx224m -Xss512k -XX:MaxDirectMemorySize=64m
+        -XX:ReservedCodeCacheSize=32m -XX:MaxMetaspaceSize=128m
+        -Djdk.nio.maxCachedBufferSize=262144 -XX:+ExitOnOutOfMemoryError
+        -XX:NativeMemoryTracking=summary -Djava.awt.headless=true
+networks:
+  edge:
+    internal: true

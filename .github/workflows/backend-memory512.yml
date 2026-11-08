@@ -1,0 +1,51 @@
+name: Backend Linux 512MiB
+
+on:
+  pull_request:
+    paths:
+      - 'ci/memory512/**'
+      - '.github/workflows/backend-memory512.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'ci/memory512/**'
+      - '.github/workflows/backend-memory512.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  memory512:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GEMINI_ENABLED: 'false'
+      GEMINI_API_KEY: ''
+      GEMINI_MODEL: ''
+      TEACHMI_MEMORY_TEST: 'true'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - name: Check test isolation and resource assertions
+        run: python3 -m unittest discover -s ci/memory512 -p test_safety.py -v
+      - name: Package unchanged backend
+        working-directory: backend
+        run: ./gradlew --no-daemon bootJar
+      - uses: docker/setup-buildx-action@v4
+      - name: Verify offline API journeys under Linux memory and CPU limits
+        run: python3 ci/memory512/run.py
+      - name: Retain safe resource and status summary only
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: linux-memory512-summary
+          path: ci/memory512/result.json
+          if-no-files-found: ignore
+          retention-days: 3
