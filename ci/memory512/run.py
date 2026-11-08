@@ -52,6 +52,19 @@ def validate_cgroup(sample):
 def validate_ownership(project,label):
     return bool(re.fullmatch(r"teachmi-memory512-[a-f0-9]{16}",project)) and project==label
 
+def health_diagnostics(state):
+    health=state.get("Health",{})
+    codes=[]
+    for entry in health.get("Log",[]):
+        output=entry.get("Output","")
+        if "curl: (28)" in output: code="HEALTH_TIMEOUT"
+        elif "curl: (7)" in output: code="HEALTH_CONNECTION_REFUSED"
+        elif "curl: (22)" in output: code="HEALTH_NON_2XX"
+        elif entry.get("ExitCode")==0: code="HEALTH_OK"
+        else: code="HEALTH_CHECK_FAILED"
+        codes.append({"exitCode":entry.get("ExitCode"),"code":code})
+    return {"status":health.get("Status"),"failingStreak":health.get("FailingStreak"),"checks":codes}
+
 def fixtures(root):
     jar=BACKEND/"build/libs/teachmi-backend-0.0.1-SNAPSHOT.jar"
     deps=root/"deps";deps.mkdir()
@@ -86,6 +99,19 @@ cat /sys/fs/cgroup/cpu.stat
     check("cgroup memory, no-swap and CPU limits are enforced",validate_cgroup(sample))
     check("No cgroup OOM or OOM kill",sample.get("oom",0)==0 and sample.get("oom_kill",0)==0)
     return sample
+
+def wait_ready(container,phase):
+    deadline=time.monotonic()+300
+    while time.monotonic()<deadline:
+        state=json.loads(docker(["inspect",container,"--format","{{json .State}}"]))
+        if not state["Running"]:
+            raise RuntimeError("Application exited during "+phase)
+        sample_resources(container,phase)
+        if state.get("Health",{}).get("Status")=="healthy":
+            RESULT.setdefault("health",{})[phase]=health_diagnostics(state)
+            return
+        time.sleep(8)
+    raise RuntimeError("Application readiness deadline during "+phase)
 
 def snapshot(operation,database):
     result={}
@@ -192,12 +218,13 @@ def main():
                 check("New project has no existing "+resource+" resources",
                       not docker(args+["--filter","label=com.docker.compose.project="+project]).strip())
             started=time.monotonic()
-            operation.capture(["up","-d","--wait","--wait-timeout","300"])
-            RESULT["startupSeconds"]=round(time.monotonic()-started,2)
+            operation.capture(["up","-d"])
             container=operation.capture(["ps","-q","app"]).decode().strip()
             host=json.loads(docker(["inspect",container,"--format","{{json .HostConfig}}"]))
             check("Docker enforces 512MiB, no swap, 0.1 CPU and no automatic restart",validate_resources(host))
             RESULT["enforcedLimits"]={k:host.get(k) for k in ("Memory","MemorySwap","NanoCpus")}
+            wait_ready(container,"startup_wait")
+            RESULT["startupSeconds"]=round(time.monotonic()-started,2)
             sample_resources(container,"startup")
             database=values["DB_NAME"]
             check("Non-superuser application role",operation.psql("SELECT rolsuper FROM pg_roles WHERE rolname='teachmi_app';").strip()==b"f")
@@ -214,7 +241,7 @@ def main():
             before=snapshot(operation,database)
             started=time.monotonic()
             operation.capture(["restart","--no-deps","app"])
-            operation.capture(["up","-d","--no-deps","--wait","--wait-timeout","300","app"])
+            wait_ready(container,"restart_wait")
             RESULT["restartSeconds"]=round(time.monotonic()-started,2)
             sample_resources(container,"restart")
             client_phase(operation,project,network,fixture_dir,state_dir,container,"phase2")
@@ -239,6 +266,12 @@ def main():
                     "Native memory allocation","insufficient memory") if code in logs]
                 state=json.loads(docker(["inspect",container,"--format","{{json .State}}"]))
                 RESULT["failedContainerState"]={k:state.get(k) for k in ("Running","OOMKilled","ExitCode")}
+                RESULT["failedHealth"]=health_diagnostics(state)
+                starts=re.findall(r"Started TeachmiApplication in ([0-9.]+) seconds",logs)
+                RESULT["applicationStartupLogSeconds"]=[float(x) for x in starts]
+                RESULT["startupMarkers"]={label:label in logs for label in (
+                    "Starting TeachmiApplication","Tomcat started on port","HikariPool-1 - Start completed",
+                    "Initialized JPA EntityManagerFactory")}
             except Exception: pass
     finally:
         if operation:

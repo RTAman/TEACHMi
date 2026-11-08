@@ -4,6 +4,16 @@ import unittest
 import run
 
 class SafetyTests(unittest.TestCase):
+    def test_health_diagnostics_cannot_echo_logs_or_credentials(self):
+        state={"Health":{"Status":"unhealthy","FailingStreak":3,"Log":[
+            {"ExitCode":28,"Output":"curl: (28) timeout secret-password"},
+            {"ExitCode":7,"Output":"curl: (7) refused private-source"},
+            {"ExitCode":22,"Output":"curl: (22) rejected secret-key"}]}}
+        result=run.health_diagnostics(state)
+        self.assertEqual([x["code"] for x in result["checks"]],
+            ["HEALTH_TIMEOUT","HEALTH_CONNECTION_REFUSED","HEALTH_NON_2XX"])
+        self.assertNotIn("secret",str(result))
+        self.assertNotIn("private-source",str(result))
     def host(self):
         return {"Memory":536870912,"MemorySwap":536870912,"NanoCpus":100000000,
                 "PortBindings":{},"RestartPolicy":{"Name":"no"}}
