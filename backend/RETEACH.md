@@ -31,7 +31,7 @@ Content-Type: application/json
 
 성공 시 200 SessionView와 `stage: chat`, `chatStage: case`, `activeReteach`를 반환합니다. 첫 질문은 `kind: reteach_question`이고 해당 재설명 ID가 붙습니다. C의 오답을 시작 전과 질문 저장 직전에 재확인합니다.
 
-첫 질문을 생성하는 동안 재설명 대상과 원래 키·버전을 저장합니다. 실패 시 activeReteach.state는 failed, availableActions는 retry_reteach입니다. 같은 시작 키·본문·원래 버전으로 재시도하면 같은 기록을 이어갑니다. 생성 중 재전송은 503, 다른 시작 요청은 409입니다. 동일 오답 시도에는 재설명 한 건을 저장합니다.
+첫 질문을 생성하는 동안 재설명 대상과 원래 키·버전을 저장합니다. 일반 실패 시 activeReteach.state는 failed, availableActions는 retry_reteach입니다. AI_GENERATION_UNCERTAIN·AI_ATTEMPT_LIMIT은 wait로 복원하며 실행 토큰을 다시 열지 않습니다. 나머지 재시도 가능한 오류는 같은 시작 키·본문·원래 버전으로 같은 기록을 이어갑니다. 생성 중 재전송은 503, 다른 시작 요청은 409입니다. 동일 오답 시도에는 재설명 한 건을 저장합니다.
 
 ## 대화와 복원
 

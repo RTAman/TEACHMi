@@ -27,7 +27,7 @@ public class LearningTurnService {
             return transactions.complete(claim, reply);
         } catch (LearningException ex) {
             var current = transactions.fail(claim, ex.code());
-            throw new LearningException(ex.status, ex.code(), ex.getMessage(), current);
+            throw ex.withSession(current);
         } catch (RuntimeException ex) {
             var current = transactions.fail(claim, "DIALOGUE_GENERATION_FAILED");
             throw new LearningException(502, "DIALOGUE_GENERATION_FAILED", "답변을 저장했습니다. 같은 요청으로 다시 시도하세요.", current);
