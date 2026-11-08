@@ -350,7 +350,7 @@ class OfflineHttpJourneyTest {
             finishChat(member,learning);
             gateway.fault.set("long-quote");
             var cBad=exchange(member,"POST",path(learning)+"/problems",null,null,true);
-            check("C v4 overlong quote rejected",cBad.status()==502 && cBad.body().path("code").asText().equals("INVALID_GEMINI_RESPONSE"));
+            check("C v5 overlong quote rejected",cBad.status()==502 && cBad.body().path("code").asText().equals("INVALID_GEMINI_RESPONSE"));
             check("C exact validation diagnostic reaches HTTP",cBad.body().path("recovery").path("diagnosticCode").asText().equals("EVIDENCE_QUOTE_TOO_LONG")
                     && cBad.body().path("recovery").path("retryAllowed").asBoolean());
             observe("C-intentional-41-character-quote",cBad);
@@ -456,8 +456,10 @@ class OfflineHttpJourneyTest {
             stop();start(true,false);
             check("uncertain survives server restart",held.equals(state(bFault,bs)) && ledger.equals(ledger()) && gateway.count()==before);
             check("all uncertain receipts retained",ledger.stream().filter(row -> row.get("state").equals("uncertain")).mapToInt(row -> (Integer)row.get("count")).sum()==3);
-            check("C provider also uses v4",gateway.audit.stream().filter(row -> row.get("operation").toString().startsWith("assessment/"))
+            check("C grading retains v4",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/grade"))
                     .allMatch(row -> row.get("promptVersion").equals("v4")));
+            check("C problem generation uses v5 candidates",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/problems"))
+                    .allMatch(row -> row.get("promptVersion").equals("v5")));
             check("interactive output budget stays below the global cap",gateway.audit.stream()
                     .filter(row -> List.of("question","dialogue","reteach_question").contains(row.get("operation")))
                     .allMatch(row -> row.get("maxOutputTokens").equals(2048)));

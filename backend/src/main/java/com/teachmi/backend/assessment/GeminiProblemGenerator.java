@@ -27,11 +27,12 @@ class GeminiProblemGenerator implements ProblemGenerator {
     // v3: 출처 표기 규칙을 명시하고 응답 길이를 줄였다. v2에서 인용 검증 실패(502)가 반복됐다.
     // v4: 프롬프트의 출처 표기 규칙(인용 6~40자, ID당 evidence 1개, 출처 1~2개)을 CitationRules로 실제 검사한다.
     //     저장된 v3 결과는 새 검사에 걸릴 수 있어 재사용하지 않는다.
-    static final String PROMPT_VERSION = "v4";
+    // v5: 포트가 소유권 검증을 마친 실제 원문에서 만든 짧은 인용 후보를 그대로 선택한다.
+    static final String PROMPT_VERSION = "v5";
     /** 문제 생성에 쓸 수 있는 출처 ID 개수의 최댓값. 프롬프트의 "1~2개"와 같다. */
     static final int MAX_SOURCES = 2;
 
-    private static final String INSTRUCTION = """
+    private static final String V4_INSTRUCTION = """
             학생이 AI 학생에게 개념을 설명한 직후 혼자 풀 응용문제 2개를 한국어로 만든다.
             - 강의 원문 발췌에 있는 사실·공식·정의만 사용한다. 원문에 없는 내용은 지어내지 않는다.
             - input.caseQuestion의 대화 사례와 조건(숫자, 대상, 상황)을 바꾼 새 문제를 낸다. 두 문제끼리도 조건이 달라야 한다.
@@ -48,6 +49,11 @@ class GeminiProblemGenerator implements ProblemGenerator {
             - sourceChunkIds의 ID마다 evidence를 정확히 1개씩 만든다. evidence 없는 ID를 남기지 않는다.
             - evidence.quote는 그 원문 조각에서 6~40글자를 한 글자도 바꾸지 않고 그대로 복사한다.
               띄어쓰기, 기호(÷, -, 괄호), 숫자 표기를 원문과 똑같이 쓰고, 요약하거나 문장을 이어 붙이지 않는다.
+            """;
+    private static final String INSTRUCTION = V4_INSTRUCTION + """
+            - 최상위 citationCandidates는 서버가 검증한 원문 조각별 6~40자 인용 후보다.
+            - 근거로 사용할 후보를 선택하여 sourceChunkId와 quote를 한 쌍으로 그대로 복사한다.
+            - 후보를 늘이거나 줄이거나 합치지 않는다. 관련 근거가 없으면 내용을 반환하지 않는다.
             """;
 
     private final GeminiGenerationPort port;
@@ -72,8 +78,9 @@ class GeminiProblemGenerator implements ProblemGenerator {
         var scope = new GeminiGenerationPort.Scope(memberId, session.sessionId(), session.materialId(),
                 session.conceptId(), concept.sourceChunkIds());
         var request = new GeminiGenerationPort.Request(scope, OPERATION, PROMPT_VERSION, INSTRUCTION,
-                json.valueToTree(input(session)), schema);
-        return port.generate(request, this::validate);
+                json.valueToTree(input(session)), schema, GeminiGenerationPort.CitationPolicy.SHORT_EXACT);
+        var previous = new GeminiGenerationPort.Request(scope, OPERATION, "v4", V4_INSTRUCTION, request.input(), schema);
+        return port.generateWithPreviousSuccess(request, previous, this::validate);
     }
 
     /**

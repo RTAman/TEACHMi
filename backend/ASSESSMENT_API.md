@@ -6,7 +6,11 @@ GET /api/v1/sessions/{sessionId}/problems/{problemId}로 같은 문항을 복원
 
 ## 실제 Gemini 생성과 비활성 상태
 
-GEMINI_ENABLED=true와 유효한 키·모델이 설정되면 GeminiProblemGenerator의 v4 프롬프트로 실제 원문 기반 문제 2개를 생성합니다. A의 소유권/선택 개념과 B의 학습 근거를 확인하고 공통 포트·CitationRules를 통과한 결과만 저장합니다. 비활성 상태에서 데모도 꺼져 있으면 503 ASSESSMENT_GENERATION_PENDING을 반환합니다.
+GEMINI_ENABLED=true와 유효한 키·모델이 설정되면 GeminiProblemGenerator의 v5 프롬프트로 실제 원문 기반 문제 2개를 생성합니다. A의 소유권/선택 개념과 B의 학습 근거를 확인하고 공통 포트·CitationRules를 통과한 결과만 저장합니다. 비활성 상태에서 데모도 꺼져 있으면 503 ASSESSMENT_GENERATION_PENDING을 반환합니다.
+
+v5는 소유권 검증을 마친 선택 원문에서 만든 6~40자의 정확한 인용 후보를 사용합니다. 모델에는 후보의 출처 ID와 인용문을 한 쌍으로 복사하도록 지시하며, 응답 스키마의 인용 enum·40자 상한과 서버의 ID/인용 쌍 검사를 함께 적용합니다. 원문·AI 응답을 잘라 맞추거나 CitationRules를 완화하지 않습니다. 후보는 조각당 최대 8개·전체 최대 64개이고, 후보가 없으면 예약·호출 전에 LEARNING_SOURCE_INCOMPLETE로 중단합니다. 이 검사는 인용의 정확성을 보장하는 기계적 검사이며 문제의 의미적 품질까지 보장하지는 않습니다.
+
+동일 입력·설정의 기존 v4 성공 캐시는 현재 소유권·정확한 원문·기존 C 규칙을 다시 검사한 뒤 읽기 전용으로 복원할 수 있습니다. 기존 성공·실패·uncertain 원장을 변경하거나 v4 요청을 재호출하지 않습니다. v5를 적용해도 unresolved 호출이 있는 세션의 신규 생성은 차단됩니다. 기존 failed 기록을 운영자가 임의로 초기화하거나 버전을 바꿔 재시도하는 절차를 추가하지 않습니다. 생성 실패의 자동 재호출도 없습니다. 채점 프롬프트와 판정은 기존 v4를 유지합니다.
 
 명시적으로 ASSESSMENT_DEMO_ENABLED=true를 설정하면 개발·시연용 고정 감가상각 문항을 사용합니다.
 이는 강의자료나 개념을 반영하지 않는 데모입니다. 데모 문항의 source_chunk_ids는 빈 목록이며

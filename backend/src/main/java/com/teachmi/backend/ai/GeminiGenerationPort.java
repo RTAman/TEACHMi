@@ -8,13 +8,24 @@ import tools.jackson.databind.JsonNode;
 public interface GeminiGenerationPort {
     <T> T generate(Request request, Validator<T> validator);
 
+    /** Read-only historical success fallback. Implementations must never generate the previous request. */
+    default <T> T generateWithPreviousSuccess(Request request, Request previous, Validator<T> validator) {
+        return generate(request, validator);
+    }
+
+    enum CitationPolicy { STANDARD, SHORT_EXACT }
+
     record Scope(String memberId, UUID sessionId, String materialId, String conceptId, List<String> sourceChunkIds) {
         public Scope { sourceChunkIds = sourceChunkIds == null ? List.of() : List.copyOf(sourceChunkIds); }
         @Override public String toString() { return "Scope[redacted]"; }
     }
 
     /** schema describes domain fields only; sourceChunkIds/evidence are added and checked by the port. */
-    record Request(Scope scope, String operation, String promptVersion, String instruction, JsonNode input, JsonNode schema) {
+    record Request(Scope scope, String operation, String promptVersion, String instruction, JsonNode input, JsonNode schema,
+                   CitationPolicy citationPolicy) {
+        public Request(Scope scope, String operation, String promptVersion, String instruction, JsonNode input, JsonNode schema) {
+            this(scope, operation, promptVersion, instruction, input, schema, CitationPolicy.STANDARD);
+        }
         public Request {
             input = input == null ? null : input.deepCopy();
             schema = schema == null ? null : schema.deepCopy();

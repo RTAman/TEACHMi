@@ -76,9 +76,34 @@ class GeminiProblemGeneratorTest {
         assertThat(request.scope().sessionId()).isEqualTo(sessionId);
         assertThat(request.scope().sourceChunkIds()).containsExactly("k01", "k02");
         assertThat(request.operation()).isEqualTo("assessment/problems");
+        assertThat(request.promptVersion()).isEqualTo("v5");
+        assertThat(request.citationPolicy()).isEqualTo(GeminiGenerationPort.CitationPolicy.SHORT_EXACT);
+        assertThat(request.instruction()).contains("citationCandidates","한 쌍으로 그대로 복사");
         assertThat(request.input().path("caseQuestion").asText()).contains("컴퓨터");
         assertThat(request.input().path("finalExplanation").asText()).isEqualTo("원가를 사용 기간에 나눕니다.");
         assertThat(request.schema().path("properties").has("sourceChunkIds")).as("출처 필드는 포트가 추가한다").isFalse();
+    }
+
+    @Test void suppliesOnlyTheSameScopedV4RequestForReadOnlySuccessRestoration() {
+        var previous=new AtomicReference<GeminiGenerationPort.Request>();
+        var current=new AtomicReference<GeminiGenerationPort.Request>();
+        var response=response(problem("문제 하나입니다. 값을 구하세요.","1"),problem("문제 둘입니다. 값을 구하세요.","2"));
+        GeminiGenerationPort port=new GeminiGenerationPort() {
+            @Override public <T> T generate(Request request,Validator<T> validator) {
+                throw new AssertionError("Production adapter must perform the historical success lookup.");
+            }
+            @Override public <T> T generateWithPreviousSuccess(Request request,Request old,Validator<T> validator) {
+                current.set(request);previous.set(old);return validator.validate(json.readTree(response));
+            }
+        };
+        assertThat(new GeminiProblemGenerator(port,json).generate("member-1",session())).hasSize(2);
+        assertThat(previous.get().scope()).isEqualTo(current.get().scope());
+        assertThat(previous.get().input()).isEqualTo(current.get().input());
+        assertThat(previous.get().schema()).isEqualTo(current.get().schema());
+        assertThat(previous.get().operation()).isEqualTo("assessment/problems");
+        assertThat(previous.get().promptVersion()).isEqualTo("v4");
+        assertThat(previous.get().citationPolicy()).isEqualTo(GeminiGenerationPort.CitationPolicy.STANDARD);
+        assertThat(previous.get().instruction()).doesNotContain("citationCandidates");
     }
 
     @Test
