@@ -169,7 +169,8 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           }
-        }
+        },
+        "description": "재접속 GET은 선택적 recovery로 터미널 보류 상태를 복원합니다. AI_GENERATION_UNCERTAIN/AI_ATTEMPT_LIMIT이면 availableActions=wait이지만 자동 완료 대기가 아닙니다."
       }
     },
     "/api/v1/sessions/{sessionId}/mode": {
@@ -1439,6 +1440,9 @@
             "items": {
               "$ref": "#/components/schemas/ReteachView"
             }
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/GenerationRecovery"
           }
         }
       },
@@ -2147,6 +2151,9 @@
             "items": {
               "$ref": "#/components/schemas/ReteachView"
             }
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/GenerationRecovery"
           }
         },
         "nullable": true
@@ -2334,7 +2341,7 @@
             ]
           }
         },
-        "description": "고정된 비밀정보 없는 진단만 제공합니다. retryAllowed는 실제 한도 내 명시적 재전송만 뜻하며 자동 재시도를 허용하지 않습니다."
+        "description": "고정된 비밀정보 없는 진단만 제공합니다. retryAllowed는 실제 한도 내 명시적 재전송만 뜻하며 자동 재시도를 허용하지 않습니다. SessionView에도 선택적으로 제공됩니다. review_required와 limit_reached는 시간 경과로 해제되지 않으므로 로딩·자동 폴링·자동 POST를 종료하세요. 이전 응답에 recovery가 없으면 pendingTurn/activeReteach.errorCode를 먼저 확인하고 availableActions=wait만으로 처리 중이라고 판단하지 마세요."
       }
     },
     "securitySchemes": {

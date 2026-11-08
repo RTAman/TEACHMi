@@ -52,7 +52,7 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 
 잘못된 AI 응답은 사용자 명시 재시도로 다시 생성할 수 있으며 최대 시도 수와 호출 한도를 적용합니다. 429의 Retry-After 초 값을 최대 1시간까지 반영하고 해석할 수 없으면 60초를 적용합니다. 내부 자동 반복 호출과 긴 대기는 수행하지 않습니다.
 
-타임아웃·연결 단절·Google 5xx는 원격 처리·과금 여부를 확인하기 어려워 `uncertain`으로 기록하고 재호출을 보류합니다. 앱이 종료되어 120초 임대가 만료된 running 기록도 같은 방식으로 보류합니다. Google 로그·사용량과 해당 회원·세션의 기록을 운영자가 검토한 뒤 재실행 여부를 결정해야 합니다. 성공 기록은 보존합니다.
+타임아웃·연결 단절·Google 5xx는 원격 처리·과금 여부를 확인하기 어려워 `uncertain`으로 기록하고 재호출을 보류합니다. 앱이 종료되어 120초 임대가 만료된 running 기록도 같은 방식으로 보류합니다. 운영자는 아래 절차로 사용량과 원장을 확인합니다. 확인 자체가 재호출을 허용하거나 보류를 해제하지는 않습니다. 성공 기록은 보존합니다.
 
 `last_error_code`는 고정된 진단 코드만 기록합니다. 키·프롬프트·원문·원본 오류 본문·예외 메시지는 로그에 남기지 않습니다. 검증한 응답과 근거 인용문은 접근이 제한된 내부 DB 기록에 저장합니다. Google generateContent는 이 생성 키의 원격 멱등성을 보장하지 않으므로, 수신 결과를 모를 때는 운영 확인으로 중복 과금 위험을 줄입니다.
 
@@ -85,6 +85,41 @@ B 대화·재설명 첫 질문은 `teachmi-dialogue-v2`·`teachmi-reteach-v2`를
 | 502 INVALID_GEMINI_RESPONSE | 형식·출처·인용문 검증 실패 |
 
 모든 생성 실패에서 학습 단계·버전을 유지합니다. V1~V3는 수정하지 않고 V4만 추가합니다.
+
+## 운영자 확인과 안전한 조치
+
+`availableActions=["wait"]`는 기존 API의 작업 차단 표시입니다. 무조건 처리 중이라는 뜻이 아닙니다. `AI_GENERATION_UNCERTAIN`/`review_required`와 `AI_ATTEMPT_LIMIT`/`limit_reached`에서는 로딩·자동 폴링·자동 POST를 종료하고 저장된 입력과 확인 안내를 보여줍니다. 재접속 GET의 선택적 recovery에도 같은 규칙을 적용합니다. 세부 화면 규칙은 [대화 API](CONVERSATION_TURNS.md#로딩과-확인-대기-구분)를 따릅니다.
+
+1. 지원 건에 회원·세션 식별자, UTC 발생 시각, 오류 코드, recovery.stage/diagnosticCode, 앱 배포 버전과 모델·타임아웃·출력 상한을 기록합니다. 키, 원문, 대화 본문과 AI 응답 전문은 지원 티켓이나 GitHub에 복사하지 않습니다. 회원 소유권을 확인하고 접근 권한이 있는 운영자가 해당 DB를 읽기 전용으로 조회합니다.
+2. 해당 회원·세션의 생성 상태·시도 수·마지막 진단·임대 시각과 호출 예약을 비교합니다. 아래 SQL은 바인딩 변수를 쓰는 읽기 전용 템플릿입니다. 운영 도구에서 실제 값을 바인딩하며 원문/content_json은 선택하지 않습니다. 운영 DB를 테스트 DB로 사용하거나 다른 회원의 기록을 넓게 조회하지 않습니다.
+
+```sql
+BEGIN READ ONLY;
+SELECT generation_key, state, attempts, last_error_code, lease_until, retry_after, updated_at
+FROM teachmi.learning_ai_generation
+WHERE member_id = :member_id AND session_id = :session_id
+ORDER BY updated_at DESC;
+
+SELECT c.id, c.generation_key, c.attempted_at, c.input_bytes, c.max_output_tokens
+FROM teachmi.learning_ai_call c
+JOIN teachmi.learning_ai_generation g ON g.generation_key = c.generation_key
+WHERE g.member_id = :member_id AND g.session_id = :session_id
+ORDER BY c.attempted_at;
+COMMIT;
+```
+
+3. 같은 UTC 시간대·프로젝트·모델의 공급자 사용량/요청 로그와 예약 횟수를 대조합니다. 입력 바이트 수와 max_output_tokens는 실제 청구 토큰 수가 아닙니다. 원장에는 공급자의 실제 토큰 사용량이나 응답 전문이 없는 실패도 있습니다. 로그에 대응 항목이 없다는 사실만으로 미처리·무료라고 판정하지 않습니다. `TRANSPORT_REQUEST_TIMEOUT`은 앱이 결과 수신을 포기한 것이며 원격 처리를 취소했다는 증거가 아닙니다. 40초를 늘리거나 출력 6144를 낮추는 설정 변경은 이후 별도 검증 대상이며 기존 호출 결과를 확정하지 않습니다.
+4. 아래 판단표에 따라 지원 건에 근거와 조치를 남깁니다. 이 PR에는 관리자 해제·원장 조정·미수신 응답 복구 API가 없습니다. 현재 가능한 조치는 읽기 조회, 기존 저장 결과 표시, 안내 및 지원 건 기록입니다. 수동 SQL로 결과나 상태를 합성하지 않습니다.
+
+| 확인 결과 | 지금 가능한 안전한 조치 |
+| --- | --- |
+| uncertain 또는 임대가 만료된 running이며 처리 여부 미확인 | 보류 유지. 공급자 기록 확인/문의 후 사용자에게 확인 중이라고 안내. 재호출 금지. |
+| 세션에 이미 검증된 답변/결과가 저장됨 | 소유권을 확인한 기존 GET으로 저장된 학습 기록 표시. 생성 POST를 복구 수단으로 사용하지 않음. |
+| 원장만 succeeded이고 세션 결과가 누락됨 | 기존 결과를 보존하고 연결 상태를 조사. 원장 내용을 수동으로 세션에 붙이지 않음. 연결 복구가 필요하면 별도 검토된 복구 도구/변경으로 처리. |
+| 공급자가 미처리를 확정함 | 증거를 기록하되 현재 보류는 유지. 재생성이 필요하면 별도로 검토된 복구 절차와 사용자의 신규 호출 승인을 받은 후 수행. 현재 API로 해제 가능하다고 안내하지 않음. |
+| AI_ATTEMPT_LIMIT | 마지막 검증 오류와 입력/설정 원인을 조사하고 수정 사항을 별도 검증. 시도 수를 줄이거나 상한을 올려 기존 작업을 재개하지 않음. 사용자는 저장된 입력 확인 및 지원 문의 가능. |
+
+`AI_ATTEMPT_LIMIT`는 생성 키에 누적된 시도 상한이므로 다음 날이나 120초 후에 자동으로 풀리지 않습니다. 분·일 사용량 제한인 `AI_USAGE_LIMIT`, 냉각 시간인 `AI_RETRY_LATER`와 구분합니다. 같은 키 재전송, 새 Idempotency-Key, 모델·프롬프트 변경, 새 세션 생성을 보류 우회 방법으로 안내하지 않습니다. uncertain/running 삭제·초기화, attempts 감소, 강제 failed/succeeded 전환 및 자동 재호출은 금지합니다. 공급자에서 확인된 사용량과 미확인 부분을 구분하여 사용자에게 설명합니다.
 
 ## 테스트
 

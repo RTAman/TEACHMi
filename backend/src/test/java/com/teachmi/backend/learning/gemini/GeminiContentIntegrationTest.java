@@ -189,6 +189,10 @@ class GeminiContentIntegrationTest {
         assertThat(pending.messages()).hasSize(2);
         assertThat(pending.pendingTurn().state()).isEqualTo("failed");
         assertThat(pending.availableActions()).containsExactly("wait");
+        assertThat(pending.recovery().action()).isEqualTo("review_required");
+        assertThat(pending.recovery().retryAllowed()).isFalse();
+        var restored=json.readTree(mvc.perform(get("/api/v1/sessions/"+id).principal(() -> "u1")).andReturn().getResponse().getContentAsByteArray());
+        assertThat(restored.path("recovery").path("action").asText()).isEqualTo("review_required");
         var turnBefore=jdbc.queryForList("SELECT * FROM teachmi.learning_turn");
         var ledgerBefore=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
         assertThat(turn("answer", "answer", "저장할 답변").getResponse().getStatus()).isEqualTo(503);
@@ -222,9 +226,54 @@ class GeminiContentIntegrationTest {
         assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(503);
         var before=jdbc.queryForList("SELECT * FROM teachmi.learning_reteach");
         assertThat(sessions.get("u1",UUID.fromString(id)).availableActions()).containsExactly("wait");
+        assertThat(sessions.get("u1",UUID.fromString(id)).recovery().action()).isEqualTo("review_required");
         assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(503);
         assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_reteach")).isEqualTo(before);
         verify(transport,times(2)).generate(anyString());
+    }
+
+    @Test void attemptLimitIsTerminalOnTheFirstErrorAndAfterReconnectWithoutAnotherCall() throws Exception {
+        mode("review","review");
+        doReturn("invalid response").when(transport).generate(anyString());
+        assertThat(turn("limited","answer","보존할 입력").getResponse().getStatus()).isEqualTo(502);
+        assertThat(turn("limited","answer","보존할 입력").getResponse().getStatus()).isEqualTo(502);
+        var limited=turn("limited","answer","보존할 입력").getResponse();
+        assertThat(limited.getStatus()).isEqualTo(429);
+        var body=json.readTree(limited.getContentAsByteArray());
+        assertThat(body.path("recovery").path("action").asText()).isEqualTo("limit_reached");
+        assertThat(body.path("recovery").path("retryAllowed").asBoolean()).isFalse();
+        var view=sessions.get("u1",UUID.fromString(id));
+        assertThat(view.availableActions()).containsExactly("wait");
+        assertThat(view.recovery().action()).isEqualTo("limit_reached");
+        assertThat(view.messages().get(1).text()).isEqualTo("보존할 입력");
+        var ledgerBefore=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        var turnBefore=jdbc.queryForList("SELECT * FROM teachmi.learning_turn");
+        assertThat(turn("limited","answer","보존할 입력").getResponse().getStatus()).isEqualTo(429);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(ledgerBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_turn")).isEqualTo(turnBefore);
+        verify(transport,times(3)).generate(anyString());
+    }
+
+    @Test void reteachAttemptLimitRestoresALimitNoticeAndKeepsTheOpeningClaim() throws Exception {
+        mode("review","review");
+        jdbc.update("UPDATE teachmi.learning_session SET stage='problem' WHERE id=?",UUID.fromString(id));
+        doReturn("invalid response").when(transport).generate(anyString());
+        var request=post("/api/v1/sessions/"+id+"/reteach").principal(() -> "u1").header("Idempotency-Key","limited-reteach")
+                .contentType("application/json").content("{\"problemId\":\"p01\",\"attemptId\":\"a01\",\"expectedVersion\":1}");
+        assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(502);
+        assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(502);
+        var limited=mvc.perform(request).andReturn().getResponse();
+        assertThat(limited.getStatus()).isEqualTo(429);
+        assertThat(json.readTree(limited.getContentAsByteArray()).path("recovery").path("action").asText()).isEqualTo("limit_reached");
+        var view=sessions.get("u1",UUID.fromString(id));
+        assertThat(view.availableActions()).containsExactly("wait");
+        assertThat(view.activeReteach().errorCode()).isEqualTo("AI_ATTEMPT_LIMIT");
+        assertThat(view.recovery().retryAllowed()).isFalse();
+        assertThat(view.recovery().action()).isEqualTo("limit_reached");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_reteach");
+        assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(429);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_reteach")).isEqualTo(before);
+        verify(transport,times(3)).generate(anyString());
     }
 
     @Test void newDialogueRejectsDuplicateEvidenceEvenWhenEachQuoteIsGrounded() throws Exception {

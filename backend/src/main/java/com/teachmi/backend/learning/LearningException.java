@@ -19,7 +19,7 @@ public class LearningException extends RuntimeException {
         this.status = status;
         this.code = code;
         this.currentSession = currentSession;
-        this.recovery = recovery;
+        this.recovery = recovery!=null?recovery:GenerationRecovery.forTerminalError(code);
     }
 
     LearningException withSession(SessionView session) { return new LearningException(status,code,getMessage(),session,recovery); }
@@ -28,8 +28,7 @@ public class LearningException extends RuntimeException {
         boolean uncertain="AI_GENERATION_UNCERTAIN".equals(code);
         return new LearningException(uncertain?503:429,code,
                 uncertain?"답변은 보존돼 있습니다. 호출 결과를 확인하기 전에는 다시 요청하지 마세요.":"생성 시도 한도에 도달했습니다.",
-                session,new GenerationRecovery("RECOVERY_GUARD",uncertain?"AI_RESULT_UNCONFIRMED":"AI_ATTEMPT_LIMIT",false,
-                uncertain?"review_required":"limit_reached"));
+                session,GenerationRecovery.forTerminalError(code));
     }
 
     public GenerationRecovery recovery() { return recovery; }
