@@ -115,15 +115,23 @@ final class GeminiGenerationService {
         if(!previous.isEmpty()) {
             String saved=ledger.succeeded(key,scope.memberId(),scope.sessionId());
             if(saved!=null) return cached(saved,chunks,validator);
+            var historicalKeys=new java.util.LinkedHashMap<String,Validator<T>>();
             for(var historicalVersion:previous) {
                 String oldRequest=historicalVersion.composer().apply(chunks);
                 String oldKey=hash(historicalVersion.version()+"\n"+settings.model()+"\n"+oldRequest);
-                String historical=ledger.succeeded(oldKey,scope.memberId(),scope.sessionId());
-                if(historical!=null) return cached(historical,chunks,historicalVersion.validator());
+                historicalKeys.putIfAbsent(oldKey,historicalVersion.validator());
+            }
+            var historical=ledger.succeededAmong(historicalKeys.keySet().stream().toList(),scope.memberId(),scope.sessionId());
+            for(var entry:historicalKeys.entrySet()) {
+                String payload=historical.get(entry.getKey());
+                if(payload!=null) return cached(payload,chunks,entry.getValue());
             }
         }
         String cached;
-        try { cached=ledger.claim(key,scope.memberId(),scope.sessionId(),request.getBytes(StandardCharsets.UTF_8).length); }
+        int outputTokens=json.readTree(request).path("generationConfig").path("maxOutputTokens").asInt(settings.maxOutputTokens());
+        int inputBytes=request.getBytes(StandardCharsets.UTF_8).length;
+        try { cached=outputTokens==settings.maxOutputTokens()?ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes)
+                :ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes,outputTokens); }
         catch(LearningException failure) {
             LOG.warn("Gemini stage=LEDGER_CLAIM code={}",failure.code());
             throw failure;

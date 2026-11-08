@@ -6,6 +6,8 @@ B가 제공하는 [공통 Gemini 호출 포트](COMMON_GEMINI_PORT.md)에 원문
 
 ## 처음 실행하기
 
+B 초기 질문 인용과 전체 응답 deadline의 후속 수정은 [분석·환경 변수·검증 기록](B_OPENING_TIMEOUT.md)을 참고하세요. 새 B 출력 상한은 전역 상한과 GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS 중 작은 값이며 기본 2048입니다.
+
 JDK 21과 Docker Compose가 필요합니다. Docker Desktop 사용자는 엔진을 먼저 켭니다. 저장소 루트에서 아래 명령을 실행하세요. Gradle은 저장소에 포함된 Wrapper가 내려받습니다.
 
 **Windows PowerShell**

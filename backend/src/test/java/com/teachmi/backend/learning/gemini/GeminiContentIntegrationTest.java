@@ -183,6 +183,108 @@ class GeminiContentIntegrationTest {
         verify(transport,times(3)).generate(anyString());
     }
 
+    @Test void historicalV3AndOpeningV1SuccessesAreUsedWithoutReservationsOrRowChanges() throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        for(String kind:List.of("dialogue","reteach","question")) {
+            String version=kind.equals("question")?"teachmi-content-v1":"teachmi-"+kind+"-v3";
+            String file=kind.equals("question")?"question-v1":kind+"-v3";
+            String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/"+file+".json"));
+            String key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                    (version+"\n"+settings.model()+"\n"+request).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            ledger.claim(key,content,request.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            var envelope=json.readTree(kind.equals("dialogue")?GeminiFixtures.dialogueResponse(json,true):GeminiFixtures.response(json,false));
+            ledger.succeed(key,envelope.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText());
+        }
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        assertThat(generator.reply(LegacyDialogueRequestsTest.dialogue()).accepted()).isTrue();
+        assertThat(generator.opening(LegacyDialogueRequestsTest.reteach()).sourceChunkIds()).containsExactly("k01");
+        assertThat(generator.openingQuestion(content).sourceChunkIds()).containsExactly("k01");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(3);
+        verifyNoInteractions(transport);
+    }
+
+    @Test void standaloneSummaryKeepsItsV1RequestAndReadsAnotherJvmFieldOrderWithoutRegeneration() throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        String request=org.springframework.test.util.ReflectionTestUtils.invokeMethod(generator,"request",content,"summary",
+                List.of(new LearningSourceReader.Chunk("k01",GeminiFixtures.SOURCE)),null,null,true);
+        var root=(tools.jackson.databind.node.ObjectNode)json.readTree(request);
+        var part=(tools.jackson.databind.node.ObjectNode)root.path("contents").get(0).path("parts").get(0);
+        var data=json.readTree(part.path("text").asText());var names=new java.util.ArrayList<>(data.properties().stream().map(Map.Entry::getKey).toList());
+        java.util.Collections.rotate(names,1);var otherJvm=new java.util.LinkedHashMap<String,JsonNode>();
+        for(String name:names)otherJvm.put(name,data.path(name));
+        part.put("text",json.writer().without(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsString(otherJvm));
+        String historical=json.writer().with(tools.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsString(json.convertValue(root,Object.class));
+        assertThat(historical).isNotEqualTo(request);
+        String key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                ("teachmi-content-v1\n"+settings.model()+"\n"+historical).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        ledger.claim(key,content,historical.length());
+        var envelope=json.readTree(GeminiFixtures.response(json,true));
+        ledger.succeed(key,envelope.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText());
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        assertThat(generator.summarize(content).sourceChunkIds()).containsExactly("k01");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(1);
+        verifyNoInteractions(transport);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"question","dialogue","reteach"})
+    void oldUncertainReceiptsCannotBeBypassedByNewQuestionOrDialogueVersions(String kind) throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        String version=kind.equals("question")?"teachmi-content-v1":"teachmi-"+kind+"-v3";
+        String file=kind.equals("question")?"question-v1":kind+"-v3";
+        String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/"+file+".json"));
+        String key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                (version+"\n"+settings.model()+"\n"+request).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        ledger.claim(key,content,request.length());ledger.fail(key,true,0,"TRANSPORT_REQUEST_TIMEOUT");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        var failure=catchThrowableOfType(() -> {
+            switch(kind) {
+                case "question" -> generator.openingQuestion(content);
+                case "dialogue" -> generator.reply(LegacyDialogueRequestsTest.dialogue());
+                default -> generator.opening(LegacyDialogueRequestsTest.reteach());
+            }
+        },LearningException.class);
+        assertThat(failure.code()).isEqualTo("AI_GENERATION_UNCERTAIN");
+        assertThat(failure.recovery().retryAllowed()).isFalse();
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(1);
+        verifyNoInteractions(transport);
+    }
+
+    @Test void openingWhitespaceMismatchIsRejectedWithoutNormalizingTheQuoteThenExplicitRetryCanRecover() throws Exception {
+        doReturn(GeminiFixtures.response(json,false).replace(GeminiFixtures.QUOTE,GeminiFixtures.QUOTE.replace(" ","  ")))
+                .when(transport).generate(anyString());
+        var failed=mvc.perform(put("/api/v1/sessions/"+id+"/mode").principal(() -> "u1").header("Idempotency-Key","opening")
+                .contentType("application/json").content("{\"mode\":\"review\",\"expectedVersion\":0}")).andReturn().getResponse();
+        assertThat(failed.getStatus()).isEqualTo(502);
+        assertThat(json.readTree(failed.getContentAsByteArray()).path("recovery").path("diagnosticCode").asText()).isEqualTo("EVIDENCE_QUOTE_NOT_EXACT");
+        assertThat(sessions.get("u1",UUID.fromString(id)).messages()).isEmpty();
+        doAnswer(call -> {
+            var request=json.readTree(call.getArgument(0,String.class));
+            var data=json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
+            assertThat(data.path("promptVersion").asText()).isEqualTo("teachmi-question-v2");
+            String quote=data.path("citationCandidates").get(0).path("quote").asText();
+            return GeminiFixtures.response(json,false).replace(GeminiFixtures.QUOTE,quote);
+        }).when(transport).generate(anyString());
+        assertThat(mode("review","opening").path("stage").asText()).isEqualTo("chat");
+        verify(transport,times(2)).generate(anyString());
+    }
+
+    @Test void interactiveBudgetIsRecordedAccuratelyAndSummaryKeepsTheGlobalBudget() {
+        var limits=new GeminiSettings(settings.apiKey(),settings.model(),settings.connectTimeout(),settings.requestTimeout(),10,100,20,2,16000,6144);
+        var beans=new StaticListableBeanFactory();beans.addBean("sources",sources);
+        try(var reserved=new GeminiLedger(database,limits)) {
+            var service=new GeminiGenerationService(limits,beans.getBeanProvider(LearningSourceReader.class),transport,reserved,json);
+            var bounded=new GeminiContentGenerator(service,limits,json,1024);var content=GeminiFixtures.context("budget-member");
+            bounded.openingQuestion(content);bounded.summarize(content);
+        }
+        assertThat(jdbc.queryForList("SELECT max_output_tokens FROM teachmi.learning_ai_call ORDER BY max_output_tokens",Integer.class)).containsExactly(1024,6144);
+        var requests=org.mockito.ArgumentCaptor.forClass(String.class);verify(transport,times(2)).generate(requests.capture());
+        assertThat(requests.getAllValues().stream().map(request -> json.readTree(request).path("generationConfig").path("maxOutputTokens").asInt()).toList())
+                .containsExactly(1024,6144);
+    }
+
     @Test
     void geminiReplyUsesSavedUserInputAndAdvancesTheServerStage() throws Exception {
         mode("review", "review");
@@ -260,6 +362,39 @@ class GeminiContentIntegrationTest {
         assertThat(turn("quote","answer","저장된 사용자 답변").getResponse().getStatus()).isEqualTo(200);
         assertThat(sessions.get("u1",UUID.fromString(id)).messages().stream().filter(m -> m.role().equals("user"))).hasSize(1);
         verify(transport,times(3)).generate(anyString());
+    }
+
+    @Test void actualLocalBodyTimeoutPreservesTheAnswerAndUncertainReceiptWithoutAnotherRequest() throws Exception {
+        mode("review","review");
+        var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
+        var executor=Executors.newVirtualThreadPerTaskExecutor();var calls=new java.util.concurrent.atomic.AtomicInteger();
+        server.setExecutor(executor);
+        server.createContext("/",exchange -> {
+            calls.incrementAndGet();exchange.getRequestBody().readAllBytes();
+            try {
+                exchange.sendResponseHeaders(200,2);exchange.getResponseBody().write('{');exchange.getResponseBody().flush();
+                Thread.sleep(1500);exchange.getResponseBody().write('}');
+            } catch(InterruptedException interrupted) {Thread.currentThread().interrupt();}
+            finally {exchange.close();}
+        });
+        server.start();
+        try {
+            var timeout=new GeminiSettings("unit-test-key","test-model",java.time.Duration.ofSeconds(1),java.time.Duration.ofMillis(500),10,100,20,2,16000,2048);
+            var network=new GeminiHttpTransport(timeout,java.net.URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/generate"));
+            doAnswer(call -> network.generate(call.getArgument(0,String.class))).when(transport).generate(anyString());
+            var failed=turn("body-timeout","answer","타임아웃 회귀용으로 저장할 설명").getResponse();
+            assertThat(failed.getStatus()).isEqualTo(503);
+            assertThat(json.readTree(failed.getContentAsByteArray()).path("recovery").path("diagnosticCode").asText()).isEqualTo("TRANSPORT_REQUEST_TIMEOUT");
+            var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+            var restored=sessions.get("u1",UUID.fromString(id));
+            assertThat(restored.pendingTurn().errorCode()).isEqualTo("AI_GENERATION_UNCERTAIN");
+            assertThat(restored.messages().get(1).text()).isEqualTo("타임아웃 회귀용으로 저장할 설명");
+            assertThat(restored.recovery().action()).isEqualTo("review_required");
+            assertThat(turn("body-timeout","answer","타임아웃 회귀용으로 저장할 설명").getResponse().getStatus()).isEqualTo(503);
+            assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_generation WHERE state='uncertain'",Long.class)).isEqualTo(1);
+            assertThat(calls.get()).isEqualTo(1);
+        } finally {server.stop(0);executor.shutdownNow();}
     }
 
     @Test void anUncertainReteachOpeningWaitsWithoutReopeningItsClaim() throws Exception {
