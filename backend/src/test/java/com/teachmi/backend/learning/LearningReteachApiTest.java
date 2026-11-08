@@ -132,6 +132,8 @@ class LearningReteachApiTest {
         assertThat(returned.path("problemReturn").path("problemId").asText()).isEqualTo("p01");
         assertThat(returned.path("problemReturn").path("originAttemptId").asText()).isEqualTo("a01");
         assertThat(returned.path("availableActions").get(0).asText()).isEqualTo("retry_problem");
+        assertThat(returned.path("messages").get(returned.path("messages").size()-1).path("text").asText())
+                .endsWith("같은 문제에 다시 도전해 보세요.").doesNotContain("이제 응용문제를 풀어 보세요.");
         assertThat(returned.path("initialAnswerId")).isEqualTo(original.path("initialAnswerId"));
         assertThat(returned.path("finalExplanationId")).isEqualTo(original.path("finalExplanationId"));
         for (int i=0; i<9; i++) assertThat(returned.path("messages").get(i)).isEqualTo(original.path("messages").get(i));
@@ -143,6 +145,23 @@ class LearningReteachApiTest {
         assertThat(dialogue.last.reteach().reteachId().toString()).isEqualTo(episode);
         assertThat(dialogue.last.messages()).allMatch(message -> episode.equals(message.reteachId().toString()));
         assertThat(turn("problem-help", "hint", null, version()).getResponse().getStatus()).isEqualTo(409);
+    }
+
+    @Test void returnedReteachGuidanceRestoresWithoutReplayingOrChangingOriginalEvidence() throws Exception {
+        start("guidance","p01","a01",version());finish("guidance");
+        var expected=load();
+        assertThat(expected.path("messages").get(expected.path("messages").size()-1).path("text").asText())
+                .endsWith("같은 문제에 다시 도전해 보세요.");
+        assertThat(expected.path("problemReturn").path("problemId").asText()).isEqualTo("p01");
+        assertThat(expected.path("problemReturn").path("originAttemptId").asText()).isEqualTo("a01");
+        assertThat(expected.path("finalExplanationId")).isEqualTo(original.path("finalExplanationId"));
+        int calls=dialogue.calls.get();
+        try(var restarted=new SpringApplicationBuilder(LearningTestApplication.class).web(WebApplicationType.NONE).run()) {
+            var restored=restarted.getBean(LearningSessionService.class).get("member-1",UUID.fromString(id));
+            assertThat(json.readTree(json.writeValueAsString(restored))).isEqualTo(expected);
+        }
+        assertThat(dialogue.calls.get()).isEqualTo(calls);
+        for(int i=0;i<9;i++)assertThat(expected.path("messages").get(i)).isEqualTo(original.path("messages").get(i));
     }
 
     @Test void interruptedReteachAndItsProblemTargetRestoreInANewApplication() throws Exception {
