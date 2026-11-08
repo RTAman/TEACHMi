@@ -22,6 +22,11 @@ Synthetic uncertain/cache/pending-answer fixtures are inserted only into the
 brand-new test database after the HTTP journey. Their checksums, source IDs and
 original file checksums must remain identical after restart. This is storage
 preservation verification, not actual AI content or report generation.
+The deliberately seeded uncertain receipt changes recovery/action metadata even
+with AI disabled. A pre-restart checkpoint checks review_required, retryAllowed=false
+and availableActions=[wait], preserves the learning fields, and saves that full
+post-fixture response as the expected restart snapshot. It must not compare with
+the earlier unrestricted select_mode response or remove the uncertain receipt.
 
 The HTTP driver sends test cookies explicitly on an internal HTTP network.
 Secure/HttpOnly/SameSite flags are checked; browser HTTPS behavior is not.

@@ -238,6 +238,7 @@ def main():
             check("All three large original PDFs match SHA-256",count==b"3")
             state=json.loads(state_dir.joinpath("private-state.json").read_text())
             seed_preservation_fixture(operation,database,state)
+            client_phase(operation,project,network,fixture_dir,state_dir,container,"checkpoint")
             before=snapshot(operation,database)
             started=time.monotonic()
             operation.capture(["restart","--no-deps","app"])

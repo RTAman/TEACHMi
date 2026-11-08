@@ -15,6 +15,7 @@ FIXTURES=Path("/fixtures")
 BASE="http://app:8080"
 CHECKS=[]
 REQUESTS=[]
+OBSERVATIONS=[]
 
 def check(name,ok):
     CHECKS.append({"check":name,"passed":bool(ok)})
@@ -118,13 +119,32 @@ def phase1():
     STATE.joinpath("private-state.json").write_text(json.dumps({"member":member.data,"other":other.data,
         "session":session,"files":files,"memberId":member.call("GET","/api/v1/auth/me")[0]["id"]}),encoding="utf-8")
 
+def checkpoint():
+    state=json.loads(STATE.joinpath("private-state.json").read_text())
+    member=Client(state["member"])
+    previous=state["session"]
+    saved,_=member.call("GET","/api/v1/sessions/"+previous["sessionId"])
+    core=lambda value:{k:v for k,v in value.items() if k not in ("recovery","availableActions")}
+    check("Synthetic uncertain only changes recovery and available actions",core(saved)==core(previous))
+    recovery=saved.get("recovery",{})
+    check("Uncertain remains held while generation is disabled",recovery.get("action")=="review_required"
+          and recovery.get("retryAllowed") is False and saved.get("availableActions")==["wait"])
+    OBSERVATIONS.append({"recoveryAction":recovery.get("action"),"retryAllowed":recovery.get("retryAllowed"),
+        "diagnosticCode":recovery.get("diagnosticCode"),"availableActions":saved.get("availableActions")})
+    # Compare restart against the state AFTER inserting the deliberate preservation fixture.
+    state["session"]=saved
+    STATE.joinpath("private-state.json").write_text(json.dumps(state),encoding="utf-8")
+
 def phase2():
     state=json.loads(STATE.joinpath("private-state.json").read_text())
     member,other=Client(state["member"]),Client(state["other"])
     session=state["session"];sid=session["sessionId"]
     member.call("GET","/api/v1/auth/me")
     saved,_=member.call("GET","/api/v1/sessions/"+sid)
+    OBSERVATIONS.append({"changedSessionFields":[key for key in set(saved)|set(session) if saved.get(key)!=session.get(key)]})
     check("Authentication and session restore after restart",saved==session)
+    check("Uncertain recovery hold survives restart",saved.get("recovery",{}).get("action")=="review_required"
+          and saved.get("recovery",{}).get("retryAllowed") is False and saved.get("availableActions")==["wait"])
     member.login()
     saved,_=member.call("GET","/api/v1/sessions/active")
     check("Relogin restores active session",saved==session)
@@ -136,9 +156,9 @@ def phase2():
 
 if __name__=="__main__":
     phase=sys.argv[1]
-    report={"phase":phase,"checks":CHECKS,"requests":REQUESTS,"success":False}
+    report={"phase":phase,"checks":CHECKS,"requests":REQUESTS,"observations":OBSERVATIONS,"success":False}
     try:
-        {"phase1":phase1,"phase2":phase2}[phase]()
+        {"phase1":phase1,"checkpoint":checkpoint,"phase2":phase2}[phase]()
         report["success"]=True
     except Exception as error:
         report["failureType"]=type(error).__name__
