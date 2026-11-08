@@ -40,7 +40,8 @@ class GeminiAnswerGraderTest {
     }
 
     private static String response(String judgement, String focus) {
-        return "{\"judgement\":\"%s\",\"reteachFocus\":\"%s\",\"reason\":\"이유\",\"sourceChunkIds\":[\"k01\"],\"evidence\":[]}"
+        return ("{\"judgement\":\"%s\",\"reteachFocus\":\"%s\",\"reason\":\"이유\",\"sourceChunkIds\":[\"k01\"],"
+                + "\"evidence\":[{\"sourceChunkId\":\"k01\",\"quote\":\"취득원가를 내용연수에 걸쳐\"}]}")
                 .formatted(judgement, focus);
     }
 
@@ -109,6 +110,16 @@ class GeminiAnswerGraderTest {
         var grade = grade(new AtomicReference<>(), response("pending_review", "무시된다"));
         assertThat(grade.judgement()).isEqualTo("pending_review");
         assertThat(grade.reteachFocus()).isNull();
+    }
+
+    @Test
+    void moreThanOneSourceIsRejected() {
+        var body = """
+                {"judgement":"correct","reteachFocus":"","reason":"이유","sourceChunkIds":["k01","k02"],
+                 "evidence":[{"sourceChunkId":"k01","quote":"취득원가를 내용연수에 걸쳐"},
+                             {"sourceChunkId":"k02","quote":"정액법은 매년 같은 금액"}]}""";
+        assertThatThrownBy(() -> grade(new AtomicReference<>(), body))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("1개까지");
     }
 
     @Test

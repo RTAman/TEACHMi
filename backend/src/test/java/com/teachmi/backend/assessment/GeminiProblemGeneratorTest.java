@@ -52,7 +52,14 @@ class GeminiProblemGeneratorTest {
     }
 
     private static String response(String... problems) {
-        return "{\"problems\":[" + String.join(",", problems) + "],\"sourceChunkIds\":[\"k01\"],\"evidence\":[]}";
+        return "{\"problems\":[" + String.join(",", problems) + "],\"sourceChunkIds\":[\"k01\"],"
+                + "\"evidence\":[{\"sourceChunkId\":\"k01\",\"quote\":\"취득원가를 내용연수에 걸쳐\"}]}";
+    }
+
+    private static String withSources(String sourceChunkIds, String evidence) {
+        return "{\"problems\":[" + problem("문제 하나입니다. 값을 구하세요.", "1") + ","
+                + problem("문제 둘입니다. 값을 구하세요.", "2") + "],\"sourceChunkIds\":" + sourceChunkIds
+                + ",\"evidence\":" + evidence + "}";
     }
 
     @Test
@@ -128,6 +135,32 @@ class GeminiProblemGeneratorTest {
         var blank = response(problem("문제 하나입니다. 값을 구하세요.", " "), problem("문제 둘입니다. 값을 구하세요.", "2"));
         assertThatThrownBy(() -> using(new AtomicReference<>(), blank).generate("member-1", session()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void twoSourcesWithOneEvidenceEachAreAccepted() {
+        var body = withSources("[\"k01\",\"k02\"]", """
+                [{"sourceChunkId":"k01","quote":"취득원가를 내용연수에 걸쳐"},
+                 {"sourceChunkId":"k02","quote":"정액법은 매년 같은 금액"}]""");
+        var drafts = using(new AtomicReference<>(), body).generate("member-1", session());
+        assertThat(drafts.getFirst().sourceChunkIds()).containsExactly("k01", "k02");
+    }
+
+    @Test
+    void moreThanTwoSourcesAreRejected() {
+        var body = withSources("[\"k01\",\"k02\",\"k03\"]", """
+                [{"sourceChunkId":"k01","quote":"취득원가를 내용연수에 걸쳐"},
+                 {"sourceChunkId":"k02","quote":"정액법은 매년 같은 금액"},
+                 {"sourceChunkId":"k03","quote":"잔존가치는 처분 예상 금액"}]""");
+        assertThatThrownBy(() -> using(new AtomicReference<>(), body).generate("member-1", session()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("2개까지");
+    }
+
+    @Test
+    void aQuoteLongerThanFortyCharactersIsRejected() {
+        var body = withSources("[\"k01\"]", "[{\"sourceChunkId\":\"k01\",\"quote\":\"" + "가".repeat(41) + "\"}]");
+        assertThatThrownBy(() -> using(new AtomicReference<>(), body).generate("member-1", session()))
+                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("6~40자");
     }
 
     @Test
