@@ -84,6 +84,7 @@ class OfflineHttpJourneyTest {
                 "--teachmi.assessment.demo-enabled=false","--teachmi.gemini.enabled="+ai,
                 "--teachmi.gemini.api-key=offline-test-key","--teachmi.gemini.model=offline-model",
                 "--teachmi.gemini.max-output-tokens=6144","--teachmi.gemini.requests-per-minute=1000",
+                "--teachmi.gemini.interactive-max-output-tokens=2048",
                 "--teachmi.gemini.requests-per-day=1000","--teachmi.gemini.member-requests-per-day=500",
                 "--logging.level.root=WARN","--logging.level.org.hibernate.orm.jdbc.bind=OFF");
         base="http://127.0.0.1:"+((WebServerApplicationContext)app).getWebServer().getPort();
@@ -453,6 +454,12 @@ class OfflineHttpJourneyTest {
             check("all uncertain receipts retained",ledger.stream().filter(row -> row.get("state").equals("uncertain")).mapToInt(row -> (Integer)row.get("count")).sum()==3);
             check("C provider also uses v4",gateway.audit.stream().filter(row -> row.get("operation").toString().startsWith("assessment/"))
                     .allMatch(row -> row.get("promptVersion").equals("v4")));
+            check("interactive output budget stays below the global cap",gateway.audit.stream()
+                    .filter(row -> List.of("question","dialogue","reteach_question").contains(row.get("operation")))
+                    .allMatch(row -> row.get("maxOutputTokens").equals(2048)));
+            check("C keeps the configured global output budget",gateway.audit.stream()
+                    .filter(row -> row.get("operation").toString().startsWith("assessment/"))
+                    .allMatch(row -> row.get("maxOutputTokens").equals(6144)));
             verifySavedCitations();
             var flyway=app.getBean(org.flywaydb.core.Flyway.class);
             check("Flyway valid with no pending migrations",flyway.validateWithResult().validationSuccessful && flyway.info().pending().length==0);

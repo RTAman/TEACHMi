@@ -54,3 +54,4 @@ teachmi:
     max-attempts: ${GEMINI_MAX_ATTEMPTS:2}
     max-source-chars: ${GEMINI_MAX_SOURCE_CHARS:16000}
     max-output-tokens: ${GEMINI_MAX_OUTPUT_TOKENS:2048}
+    interactive-max-output-tokens: ${GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS:2048}

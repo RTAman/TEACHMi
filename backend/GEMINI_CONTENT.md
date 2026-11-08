@@ -3,7 +3,7 @@
 Gemini 어댑터는 기존 `LearningContentGenerator`를 구현합니다. 기존 모드 선택·설명 시작 API의 요청과 응답 형식을 사용하고 요약과 첫 질문을 DB에 저장합니다. GET과 성공 요청의 재전송은 저장한 내용을 돌려줍니다.
 
 B와 향후 소비자가 공유할 Java 호출 계약은 [공통 Gemini 포트](COMMON_GEMINI_PORT.md)의 GeminiGenerationPort입니다.
-기존 B 생성기와 C 문제 생성·채점은 같은 실행 엔진·원문/출처 검증·V4 사용량 원장을 사용합니다. B 대화/재설명의 새 요청은 v3이고, 기존 v1·v2 성공 영수증과 생성 키 계산은 유지합니다.
+기존 B 생성기와 C 문제 생성·채점은 같은 실행 엔진·원문/출처 검증·V4 사용량 원장을 사용합니다. B 초기 질문은 question-v2, 대화/재설명의 새 요청은 v4이며 기존 성공 영수증과 생성 키 계산을 유지합니다. [초기 인용·타임아웃 분석](B_OPENING_TIMEOUT.md)을 참고하세요.
 
 ## A 원문 연결
 
@@ -23,13 +23,14 @@ A의 `MaterialLearningSources`가 `LearningSourceReader`를 구현합니다. 직
 | GEMINI_API_KEY | 빈 값 | Google API 키 |
 | GEMINI_MODEL | 빈 값 | 계정에서 generateContent를 지원하는 모델 ID |
 | GEMINI_CONNECT_TIMEOUT_SECONDS | 3 | 연결 제한, 1~10초 |
-| GEMINI_REQUEST_TIMEOUT_SECONDS | 20 | 본문 수신까지의 요청 제한, 1~60초 |
+| GEMINI_REQUEST_TIMEOUT_SECONDS | 20 | 연결·헤더·전체 본문 완료까지의 단일 제한, 1~60초 |
 | GEMINI_REQUESTS_PER_MINUTE | 10 | 동일 DB를 쓰는 앱 전체의 최근 1분 호출 한도 |
 | GEMINI_REQUESTS_PER_DAY | 100 | 앱 전체 UTC 날짜별 호출 한도 |
 | GEMINI_MEMBER_REQUESTS_PER_DAY | 20 | 회원별 UTC 날짜별 호출 한도 |
 | GEMINI_MAX_ATTEMPTS | 2 | 같은 콘텐츠의 명시적 생성 시도 한도, 최대 3 |
 | GEMINI_MAX_SOURCE_CHARS | 16000 | 실제 원문의 글자 수 상한 |
-| GEMINI_MAX_OUTPUT_TOKENS | 2048 | 최대 출력 토큰, 최대 8192 |
+| GEMINI_MAX_OUTPUT_TOKENS | 2048 | 전역 최대 출력 토큰, 최대 8192 |
+| GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS | 2048 | 새 B 질문·대화·재설명 상한(256–8192). 전역 상한과 작은 값 사용; 요약/C는 전역 상한 유지 |
 
 요청 수는 전송 전에 예약하고 실패한 호출도 집계합니다. Google 자체 제한은 프로젝트·모델·사용 등급에 따라 적용됩니다. 앱의 UTC 한도는 같은 DB를 쓰는 TEACHMi 호출을 집계합니다. 실제 청구 한도와 다른 앱의 사용량은 Google 프로젝트에서도 관리하세요. [Google 호출 제한](https://ai.google.dev/gemini-api/docs/rate-limits)
 
@@ -43,7 +44,7 @@ JSON 스키마를 지정하고 서버에서 필수 필드·타입·목록·길�
 
 ## 사용량·재시도·중복 생성
 
-기존 API의 Idempotency-Key·학습 버전 검사를 유지합니다. 내부 생성 키에는 회원·세션·자료·개념·모드·원문·저장된 요약·모델·프롬프트 버전을 반영하며 JSON 키를 정렬해 재기동 후에도 같은 키를 만듭니다.
+기존 API의 Idempotency-Key·학습 버전 검사를 유지합니다. 내부 생성 키에는 회원·세션·자료·개념·모드·원문·저장된 요약·모델·프롬프트 버전을 반영하며 새 질문·대화와 공통 포트의 JSON을 정렬해 재기동 후에도 같은 키를 만듭니다. 과거 단독 v1의 필드 순서 변형은 읽기 전용 캐시 조회로 보완합니다.
 
 V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·시도 수·사용량을 저장합니다. 세션 트랜잭션과 별도로 커밋하므로, AI 결과 저장 뒤 세션 변경이 롤백돼도 재요청은 저장한 결과를 사용할 수 있습니다. 캐시 조회 전에도 A의 현재 소유권과 원문을 확인합니다.
 
@@ -55,11 +56,11 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 
 `last_error_code`는 고정된 진단 코드만 기록합니다. 키·프롬프트·원문·원본 오류 본문·예외 메시지는 로그에 남기지 않습니다. 검증한 응답과 근거 인용문은 접근이 제한된 내부 DB 기록에 저장합니다. Google generateContent는 이 생성 키의 원격 멱등성을 보장하지 않으므로, 수신 결과를 모를 때는 운영 확인으로 중복 과금 위험을 줄입니다.
 
-B 대화·재설명 첫 질문은 `teachmi-dialogue-v3`·`teachmi-reteach-v3`를 사용합니다. 허가된 원문에서 연속된 6~40자 후보를 결정적으로 만들고 `citationCandidates`와 quote enum으로 제공합니다. 후보는 기존 요청 크기 상한 안에서 청크당 최대 8개/전체 최대 64개이며, 원문과 응답을 사후 보정하지 않습니다. 출처 1~2개·ID당 인용 1개·정확한 부분 문자열·6~40자 서버 검증은 유지합니다.
+B 대화·재설명 첫 질문은 `teachmi-dialogue-v4`·`teachmi-reteach-v4`를 사용합니다. 허가된 원문에서 연속된 6~40자 후보를 결정적으로 만들고 `citationCandidates`와 quote enum으로 제공합니다. 후보는 기존 요청 크기 상한 안에서 청크당 최대 8개/전체 최대 64개이며, 원문과 응답을 사후 보정하지 않습니다. 출처 1~2개·ID당 인용 1개·정확한 부분 문자열·6~40자 서버 검증은 유지합니다.
 
 [Google generateContent의 responseJsonSchema 지원 목록](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig)에는 enum이 포함되지만 문자열 maxLength는 포함되지 않습니다. 따라서 maxLength 지시만으로 모델의 길이 준수를 보장하지 않고 짧은 후보 선택과 서버 검증을 함께 사용합니다. 실 모델의 생성 품질 개선은 승인된 별도 시험으로 확인해야 합니다.
 
-요약·최초 사례 질문의 v1 요청은 유지합니다. 새 v3 성공 → 동일 입력의 v2 성공 → v1 성공 순서로 현재 원문을 재검증하고 추가 호출 없이 복원합니다. 과거 요청 JSON은 바이트 그대로 재구성하며 성공/uncertain 원장·시도 수를 변경하지 않습니다. 원문/설정이 바뀐 요청도 기존 uncertain을 우회하지 못합니다.
+요약 v1은 유지합니다. 초기 질문은 question-v2와 짧은 후보를 사용하고 과거 초기 질문·요약 v1의 Map 필드 순서 24가지 키를 일괄 조회합니다. 대화/재설명은 새 v4 → v3 → v2 → v1 성공 순서로 현재 원문을 재검증하고 추가 호출 없이 복원합니다. 과거 요청 JSON은 바이트 그대로 재구성하며 성공/uncertain 원장·시도 수를 변경하지 않습니다. 원문/설정이 바뀐 요청도 기존 uncertain을 우회하지 못합니다.
 
 같은 요청의 마지막 허용 시도가 검증 실패하면 502 코드와 구체 진단을 유지하면서 즉시 `retryAllowed=false`, `action=limit_reached`를 반환합니다. 대화·재설명에는 `AI_ATTEMPT_LIMIT` 보류를 저장해 GET에서도 복원하므로 추가 POST로 한도를 확인할 필요가 없습니다. 다른 해시의 과거 일반 실패만으로 세션 전체를 차단하지 않습니다.
 

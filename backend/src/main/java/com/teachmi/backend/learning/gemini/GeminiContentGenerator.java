@@ -30,6 +30,7 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
     private final GeminiSettings settings;
     private final GeminiGenerationService generation;
     private final ObjectMapper json;
+    private final int interactiveMaxOutputTokens;
 
     GeminiContentGenerator(GeminiSettings settings, ObjectProvider<LearningSourceReader> sources,
                            GeminiTransport transport, GeminiLedger ledger, ObjectMapper json) {
@@ -37,7 +38,14 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
     }
 
     GeminiContentGenerator(GeminiGenerationService generation,GeminiSettings settings,ObjectMapper json) {
+        this(generation,settings,json,2048);
+    }
+
+    GeminiContentGenerator(GeminiGenerationService generation,GeminiSettings settings,ObjectMapper json,int interactiveMaxOutputTokens) {
+        if(interactiveMaxOutputTokens<256 || interactiveMaxOutputTokens>8192)
+            throw new IllegalArgumentException("Invalid interactive output limit");
         this.generation=generation;this.settings=settings;this.json=json;
+        this.interactiveMaxOutputTokens=interactiveMaxOutputTokens;
     }
 
     @Override public Summary summarize(LearningContentGenerator.Context context) {
@@ -75,21 +83,87 @@ public final class GeminiContentGenerator implements LearningContentGenerator, L
                              LearningDialogueGenerator.Context dialogue, LearningReteachGenerator.Context reteach) {
         if(dialogue!=null || reteach!=null) {
             String prefix=reteach!=null?"teachmi-reteach-v":"teachmi-dialogue-v";
-            return generation.legacyWithPreviousSuccesses(context,prefix+"3",
-                    chunks -> request(context,kind,chunks,dialogue,reteach,3),payload -> validatePayload(payload,kind,dialogue,true),
-                    List.of(new GeminiGenerationService.Previous<>(prefix+"2",
+            return generation.legacyWithPreviousSuccesses(context,prefix+"4",
+                    chunks -> interactiveRequest(context,kind,chunks,dialogue,reteach),payload -> validatePayload(payload,kind,dialogue,true),
+                    List.of(new GeminiGenerationService.Previous<>(prefix+"3",
+                            chunks -> request(context,kind,chunks,dialogue,reteach,3),payload -> validatePayload(payload,kind,dialogue,true)),
+                            new GeminiGenerationService.Previous<>(prefix+"2",
                             chunks -> request(context,kind,chunks,dialogue,reteach,true),payload -> validatePayload(payload,kind,dialogue,true)),
                             new GeminiGenerationService.Previous<>(prefix+"1",
                             chunks -> request(context,kind,chunks,dialogue,reteach,false),payload -> validatePayload(payload,kind,dialogue,false))));
         }
-        return generation.legacy(context,PROMPT_VERSION,chunks -> request(context,kind,chunks,dialogue,reteach),
-                payload -> validatePayload(payload,kind,dialogue,false));
+        if(kind.equals("question")) {
+            return generation.legacyWithPreviousSuccesses(context,"teachmi-question-v2",
+                    chunks -> interactiveRequest(context,kind,chunks,null,null),payload -> validatePayload(payload,kind,null,true),
+                    historicalContent(context,kind));
+        }
+        return generation.legacyWithPreviousSuccesses(context,PROMPT_VERSION,chunks -> request(context,kind,chunks,dialogue,reteach),
+                payload -> validatePayload(payload,kind,dialogue,false),historicalContent(context,kind));
     }
 
     private String request(LearningContentGenerator.Context context, String kind,
                            List<LearningSourceReader.Chunk> chunks, LearningDialogueGenerator.Context dialogue,
                            LearningReteachGenerator.Context reteach) {
         return request(context,kind,chunks,dialogue,reteach,true);
+    }
+
+    /** New requests only. Historical serializers below remain byte-identical for cache lookup. */
+    private String interactiveRequest(LearningContentGenerator.Context context,String kind,List<LearningSourceReader.Chunk> chunks,
+                                      LearningDialogueGenerator.Context dialogue,LearningReteachGenerator.Context reteach) {
+        var root=(tools.jackson.databind.node.ObjectNode)json.readTree(request(context,kind,chunks,dialogue,reteach,3));
+        var part=(tools.jackson.databind.node.ObjectNode)root.path("contents").get(0).path("parts").get(0);
+        var data=(tools.jackson.databind.node.ObjectNode)json.readTree(part.path("text").asText());
+        String version=dialogue!=null?"teachmi-dialogue-v4":reteach!=null?"teachmi-reteach-v4":"teachmi-question-v2";
+        data.put("promptVersion",version);
+        if(dialogue!=null) {
+            var compact=(tools.jackson.databind.node.ObjectNode)data.path("dialogue");
+            compact.remove("learning"); // Already present in top-level context, including preparation and owned scope.
+            var messages=json.createArrayNode();
+            for(var original:compact.path("messages")) {
+                var message=json.createObjectNode();
+                for(String field:List.of("role","kind","chatStage","text")) message.set(field,original.path(field));
+                messages.add(message);
+            }
+            compact.set("messages",messages); // Preserve order and every original text; never clip or rewrite answers.
+        }
+        part.put("text",json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+                .writeValueAsString(json.convertValue(data,Object.class)));
+        var config=(tools.jackson.databind.node.ObjectNode)root.path("generationConfig");
+        config.put("maxOutputTokens",Math.min(settings.maxOutputTokens(),interactiveMaxOutputTokens));
+        if(kind.equals("question")) {
+            var candidates=new java.util.ArrayList<ShortCitationCandidates.Candidate>();
+            for(var candidate:data.path("citationCandidates")) candidates.add(new ShortCitationCandidates.Candidate(
+                    candidate.path("sourceChunkId").asText(),candidate.path("quote").asText()));
+            config.set("responseJsonSchema",json.valueToTree(schema(kind,chunks,true,candidates)));
+            var instruction=(tools.jackson.databind.node.ObjectNode)root.path("systemInstruction").path("parts").get(0);
+            instruction.put("text",instruction.path("text").asText()+EXACT_QUOTES);
+        }
+        return json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
+                .writeValueAsString(json.convertValue(root,Object.class));
+    }
+
+    private static final List<List<String>> CONTENT_V1_ORDERS=legacyDataOrders();
+    private static List<List<String>> legacyDataOrders() {
+        var keys=List.of("operation","context","lectureExcerpts","promptVersion");var orders=new java.util.ArrayList<List<String>>();
+        for(String a:keys) for(String b:keys) for(String c:keys) for(String d:keys)
+            if(!a.equals(b) && !a.equals(c) && !b.equals(c) && !List.of(a,b,c).contains(d)) orders.add(List.of(a,b,c,d));
+        return List.copyOf(orders);
+    }
+
+    private List<GeminiGenerationService.Previous<JsonNode>> historicalContent(LearningContentGenerator.Context context,String kind) {
+        return CONTENT_V1_ORDERS.stream().<GeminiGenerationService.Previous<JsonNode>>map(order ->
+                new GeminiGenerationService.Previous<>(PROMPT_VERSION,
+                        chunks -> historicalContentRequest(context,kind,chunks,order),payload -> validatePayload(payload,kind,null,false))).toList();
+    }
+
+    /** Old standalone v1 used unordered Map.of for the inner JSON string. Read all 24 historical orders. */
+    private String historicalContentRequest(LearningContentGenerator.Context context,String kind,List<LearningSourceReader.Chunk> chunks,List<String> order) {
+        var root=(tools.jackson.databind.node.ObjectNode)json.readTree(request(context,kind,chunks,null,null));
+        var part=(tools.jackson.databind.node.ObjectNode)root.path("contents").get(0).path("parts").get(0);
+        var data=json.readTree(part.path("text").asText());var legacy=new java.util.LinkedHashMap<String,JsonNode>();
+        for(String key:order) legacy.put(key,data.path(key));
+        part.put("text",json.writer().without(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsString(legacy));
+        return json.writer().with(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS).writeValueAsString(json.convertValue(root,Object.class));
     }
     private String request(LearningContentGenerator.Context context,String kind,List<LearningSourceReader.Chunk> chunks,
                            LearningDialogueGenerator.Context dialogue,LearningReteachGenerator.Context reteach,boolean exact) {

@@ -37,10 +37,15 @@ public class GeminiLedger implements AutoCloseable {
     }
 
     String claim(String key, String memberId, UUID sessionId, int inputBytes) {
-        return transaction.execute(status -> claimInside(key, memberId, sessionId, inputBytes));
+        return claim(key,memberId,sessionId,inputBytes,settings.maxOutputTokens());
     }
 
-    private String claimInside(String key, String memberId, UUID sessionId, int inputBytes) {
+    String claim(String key,String memberId,UUID sessionId,int inputBytes,int outputTokens) {
+        if(outputTokens<256 || outputTokens>settings.maxOutputTokens()) throw new IllegalArgumentException("Invalid output reservation");
+        return transaction.execute(status -> claimInside(key, memberId, sessionId, inputBytes,outputTokens));
+    }
+
+    private String claimInside(String key, String memberId, UUID sessionId, int inputBytes,int outputTokens) {
         // Serialize project-wide quota reservations across all backend instances sharing this DB.
         jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended('teachmi:gemini:quota',0))");
         var rows = jdbc.queryForList("SELECT *, lease_until > now() AS leased, retry_after > now() AS cooling "
@@ -104,7 +109,7 @@ public class GeminiLedger implements AutoCloseable {
                 INSERT INTO teachmi.learning_ai_call
                     (id,generation_key,member_id,attempted_at,input_bytes,max_output_tokens)
                 VALUES (?,?,?,now(),?,?)
-                """, UUID.randomUUID(), key, memberId, inputBytes, settings.maxOutputTokens());
+                """, UUID.randomUUID(), key, memberId, inputBytes, outputTokens);
         return null;
     }
 
@@ -119,6 +124,18 @@ public class GeminiLedger implements AutoCloseable {
         var values=jdbc.queryForList("SELECT content_json FROM teachmi.learning_ai_generation "
                 +"WHERE generation_key=? AND member_id=? AND session_id=? AND state='succeeded'",String.class,key,member,session);
         return values.isEmpty()?null:values.getFirst();
+    }
+
+    /** Scoped read-only lookup; historical cache discovery must never reserve or rewrite a receipt. */
+    java.util.Map<String,String> succeededAmong(java.util.List<String> keys,String member,UUID session) {
+        if(keys.isEmpty()) return java.util.Map.of();
+        var parameters=new java.util.ArrayList<Object>();parameters.add(member);parameters.add(session);parameters.addAll(keys);
+        var placeholders=String.join(",",java.util.Collections.nCopies(keys.size(),"?"));
+        var found=new java.util.HashMap<String,String>();
+        jdbc.query("SELECT generation_key,content_json FROM teachmi.learning_ai_generation WHERE member_id=? AND session_id=? "
+                        +"AND state='succeeded' AND generation_key IN ("+placeholders+")",
+                (org.springframework.jdbc.core.RowCallbackHandler)row -> found.put(row.getString(1),row.getString(2)),parameters.toArray());
+        return found;
     }
 
     /** Only the exact failed request may exhaust its attempts; no session-wide inference from old hashes. */

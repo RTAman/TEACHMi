@@ -29,6 +29,18 @@ class LegacyDialogueRequestsTest {
         assertThat(oldDialogue).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v1.json")));
         assertThat(oldReteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v1.json")));
         String updated=ReflectionTestUtils.invokeMethod(generator,"request",content(),"dialogue",chunks,dialogue(),null,true);
+        String v3Dialogue=ReflectionTestUtils.invokeMethod(generator,"request",content(),"dialogue",chunks,dialogue(),null,3);
+        String v3Reteach=ReflectionTestUtils.invokeMethod(generator,"request",content(),"reteach_question",chunks,null,reteach(),3);
+        String savedQuestion=Files.readString(Path.of("src/test/resources/gemini-legacy/question-v1.json"));
+        var oldData=json.readTree(json.readTree(savedQuestion).path("contents").get(0).path("parts").get(0).path("text").asText());
+        var oldOrder=oldData.properties().stream().map(java.util.Map.Entry::getKey).toList();
+        String v1Question=ReflectionTestUtils.invokeMethod(generator,"historicalContentRequest",content(),"question",chunks,oldOrder);
+        assertThat(v3Dialogue).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v3.json")));
+        assertThat(v3Reteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v3.json")));
+        assertThat(v1Question).isEqualTo(savedQuestion);
+        List<List<String>> orders=ReflectionTestUtils.invokeMethod(generator,"legacyDataOrders");
+        assertThat(orders).hasSize(24).contains(oldOrder);
+        assertThat(orders.stream().distinct()).hasSize(24);
         String v2Reteach=ReflectionTestUtils.invokeMethod(generator,"request",content(),"reteach_question",chunks,null,reteach(),true);
         assertThat(updated).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/dialogue-v2.json")));
         assertThat(v2Reteach).isEqualTo(Files.readString(Path.of("src/test/resources/gemini-legacy/reteach-v2.json")));

@@ -37,7 +37,8 @@ public class GeminiConfiguration {
     GeminiGenerationPort geminiGenerationPort(GeminiGenerationService service) {
         return new GeminiPortAdapter(service);
     }
-    @Bean GeminiContentGenerator geminiContentGenerator(GeminiGenerationService service, GeminiSettings settings, ObjectMapper json) {
-        return new GeminiContentGenerator(service, settings, json);
+    @Bean GeminiContentGenerator geminiContentGenerator(GeminiGenerationService service, GeminiSettings settings, ObjectMapper json,Environment environment) {
+        return new GeminiContentGenerator(service, settings, json,
+                environment.getProperty("teachmi.gemini.interactive-max-output-tokens",Integer.class,2048));
     }
 }
