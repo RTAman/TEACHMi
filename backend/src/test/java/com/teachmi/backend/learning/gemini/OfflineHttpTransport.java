@@ -28,6 +28,15 @@ final class OfflineHttpTransport implements GeminiTransport {
         safe.put("promptVersion",data.path("promptVersion").asText());
         safe.put("fault",injection==null?"none":injection);
         safe.put("maxOutputTokens",request.path("generationConfig").path("maxOutputTokens").asInt());
+        if(operation.equals("dialogue")) {
+            var policy=data.path("responsePolicy");
+            safe.put("chatStage",data.path("dialogue").path("chatStage").asText());
+            safe.put("turnKind",data.path("dialogue").path("kind").asText());
+            safe.put("responseAction",policy.path("onAccepted").path("action").asText());
+            safe.put("dialogueComplete",policy.path("onAccepted").path("dialogueComplete").asBoolean());
+            safe.put("assessmentComplete",policy.path("assessmentComplete").asBoolean());
+            safe.put("reteach",!data.path("dialogue").path("reteach").isMissingNode());
+        }
         audit.add(safe);
         if("timeout".equals(injection))
             throw new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT");

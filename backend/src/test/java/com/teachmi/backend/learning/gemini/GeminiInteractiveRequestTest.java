@@ -40,7 +40,7 @@ class GeminiInteractiveRequestTest {
         var generator=generator(6144,2048);
         String old=ReflectionTestUtils.invokeMethod(generator,"request",LegacyDialogueRequestsTest.content(),"dialogue",chunks,LegacyDialogueRequestsTest.dialogue(),null,3);
         String compact=request(generator,"dialogue");var before=data(old);var after=data(compact);
-        assertThat(after.path("promptVersion").asText()).isEqualTo("teachmi-dialogue-v4");
+        assertThat(after.path("promptVersion").asText()).isEqualTo("teachmi-dialogue-v5");
         assertThat(after.path("context")).isEqualTo(before.path("context"));
         assertThat(after.path("dialogue").has("learning")).isFalse();
         for(String field:List.of("turnId","kind","text","chatStage","targetQuestion"))
@@ -50,7 +50,7 @@ class GeminiInteractiveRequestTest {
         for(int i=0;i<a.size();i++) for(String field:List.of("role","kind","chatStage","text"))
             assertThat(a.get(i).path(field)).isEqualTo(b.get(i).path(field));
         assertThat(after.path("lectureExcerpts")).isEqualTo(before.path("lectureExcerpts"));
-        assertThat(compact.length()).isLessThan(old.length());
+        assertThat(after.path("dialogue").toString().length()).isLessThan(before.path("dialogue").toString().length());
         assertThat(compact).isEqualTo(request(generator,"dialogue"));
         assertCanonical(json.readTree(compact));assertCanonical(after);
     }
