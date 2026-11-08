@@ -8,6 +8,8 @@ import com.teachmi.backend.ai.GeminiGenerationPort;
 import com.teachmi.backend.learning.ConceptSource;
 import com.teachmi.backend.learning.SessionView;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,12 +56,50 @@ class GeminiAnswerGraderTest {
         assertThat(grade.reteachFocus()).isNull();
         var request = seen.get();
         assertThat(request.operation()).isEqualTo("assessment/grade");
+        assertThat(request.promptVersion()).isEqualTo("v5");
+        assertThat(request.citationPolicy()).isEqualTo(GeminiGenerationPort.CitationPolicy.SHORT_EXACT);
+        assertThat(request.instruction()).contains("citationCandidates","한 쌍으로 그대로 복사");
         assertThat(request.scope().memberId()).isEqualTo("member-1");
         assertThat(request.scope().sessionId()).isEqualTo(sessionId);
         assertThat(request.scope().sourceChunkIds()).containsExactly("k01", "k02");
         assertThat(request.input().path("attemptId").asText()).isEqualTo(attemptId.toString());
         assertThat(request.input().path("answer").asText()).isEqualTo("200만원");
         assertThat(request.schema().path("properties").has("evidence")).as("근거 필드는 포트가 추가한다").isFalse();
+    }
+
+    @Test
+    void preservesTheExactV4InstructionScopeAndSavedInputForReadOnlySuccessRestoration() throws Exception {
+        var current=new AtomicReference<GeminiGenerationPort.Request>();
+        var previous=new AtomicReference<GeminiGenerationPort.Request>();
+        GeminiGenerationPort port=new GeminiGenerationPort() {
+            @Override public <T> T generate(Request request,Validator<T> validator) {
+                throw new AssertionError("Production adapter must look up historical success.");
+            }
+            @Override public <T> T generateWithPreviousSuccess(Request request,Request old,Validator<T> validator) {
+                current.set(request);previous.set(old);
+                return validator.validate(json.readTree(response("correct","")));
+            }
+        };
+        assertThat(new GeminiAnswerGrader(port,json).grade(input()).judgement()).isEqualTo("correct");
+        var old=previous.get();
+        assertThat(old.scope()).isEqualTo(current.get().scope());
+        assertThat(old.operation()).isEqualTo("assessment/grade");
+        assertThat(old.promptVersion()).isEqualTo("v4");
+        assertThat(old.citationPolicy()).isEqualTo(GeminiGenerationPort.CitationPolicy.STANDARD);
+        assertThat(old.input()).isEqualTo(current.get().input());
+        assertThat(old.schema()).isEqualTo(current.get().schema());
+        assertThat(old.instruction()).doesNotContain("citationCandidates");
+        var digest=java.security.MessageDigest.getInstance("SHA-256").digest(
+                old.instruction().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        // Frozen before changing the adapter: the real v4 instruction participates in historical keys.
+        assertThat(java.util.HexFormat.of().formatHex(digest)).isEqualTo(
+                "569d8e9fc4cc4bb9ca9c1ca7ce4734d8f6d7ec230bc77f0f1365ad2e9b2a61d2");
+    }
+
+    @ParameterizedTest @ValueSource(strings={"correct","wrong","pending_review"})
+    void theNewCandidateRequestDoesNotForceOrChangeTheModelsJudgement(String judgement) {
+        var result=grade(new AtomicReference<>(),response(judgement,"공식을 적용한 이유를 다시 생각해 보세요."));
+        assertThat(result.judgement()).isEqualTo(judgement);
     }
 
     @Test

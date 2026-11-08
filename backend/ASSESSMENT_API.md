@@ -10,7 +10,7 @@ GEMINI_ENABLED=true와 유효한 키·모델이 설정되면 GeminiProblemGenera
 
 v5는 소유권 검증을 마친 선택 원문에서 만든 6~40자의 정확한 인용 후보를 사용합니다. 모델에는 후보의 출처 ID와 인용문을 한 쌍으로 복사하도록 지시하며, 응답 스키마의 인용 enum·40자 상한과 서버의 ID/인용 쌍 검사를 함께 적용합니다. 원문·AI 응답을 잘라 맞추거나 CitationRules를 완화하지 않습니다. 후보는 조각당 최대 8개·전체 최대 64개이고, 후보가 없으면 예약·호출 전에 LEARNING_SOURCE_INCOMPLETE로 중단합니다. 이 검사는 인용의 정확성을 보장하는 기계적 검사이며 문제의 의미적 품질까지 보장하지는 않습니다.
 
-동일 입력·설정의 기존 v4 성공 캐시는 현재 소유권·정확한 원문·기존 C 규칙을 다시 검사한 뒤 읽기 전용으로 복원할 수 있습니다. 기존 성공·실패·uncertain 원장을 변경하거나 v4 요청을 재호출하지 않습니다. v5를 적용해도 unresolved 호출이 있는 세션의 신규 생성은 차단됩니다. 기존 failed 기록을 운영자가 임의로 초기화하거나 버전을 바꿔 재시도하는 절차를 추가하지 않습니다. 생성 실패의 자동 재호출도 없습니다. 채점 프롬프트와 판정은 기존 v4를 유지합니다.
+동일 입력·설정의 기존 v4 성공 캐시는 현재 소유권·정확한 원문·기존 C 규칙을 다시 검사한 뒤 읽기 전용으로 복원할 수 있습니다. 기존 성공·실패·uncertain 원장을 변경하거나 v4 요청을 재호출하지 않습니다. v5를 적용해도 unresolved 호출이 있는 세션의 신규 생성은 차단됩니다. 기존 failed 기록을 운영자가 임의로 초기화하거나 버전을 바꿔 재시도하는 절차를 추가하지 않습니다. 생성 실패의 자동 재호출도 없습니다. 채점도 아래 v5의 짧은 인용 후보를 사용하며 판정 기준은 유지합니다.
 
 명시적으로 ASSESSMENT_DEMO_ENABLED=true를 설정하면 개발·시연용 고정 감가상각 문항을 사용합니다.
 이는 강의자료나 개념을 반영하지 않는 데모입니다. 데모 문항의 source_chunk_ids는 빈 목록이며
@@ -62,7 +62,11 @@ pending_review는 오답으로 집계하지 않으며 next_problem 또는 finish
 동시 같은 키는 한 결과로 수렴하고 다른 키의 중복 첫 시도는 거절합니다.
 원격 채점 실패 시 입력 답안은 미판정으로 보존됩니다. 같은 키·본문으로 재접근하며 recovery가 허용하는 경우에만 명시적으로 재시도합니다.
 
-Gemini 활성 시 RemoteAnswerGrader의 v4 프롬프트로 답과 풀이를 실제 채점합니다. 입력 저장/커밋 → DB 잠금 밖 AI 호출 → 최신 상태 검증/판정 저장으로 분리합니다. correct/wrong/pending_review 판정과 v4 출처 규칙을 유지합니다. 비활성 상태에서 데모도 꺼져 있으면 ASSESSMENT_GRADING_PENDING입니다. 명시적 데모의 FixedAnswerGrader는 의미 기반 채점이 아닙니다.
+Gemini 활성 시 GeminiAnswerGrader의 v5 프롬프트로 답과 풀이를 실제 채점합니다. 입력 저장/커밋 → DB 잠금 밖 AI 호출 → 최신 상태 검증/판정 저장으로 분리합니다. correct/wrong/pending_review 판정 기준과 출처 1개·ID당 evidence 1개·6~40자 정확 인용 규칙은 유지합니다. 비활성 상태에서 데모도 꺼져 있으면 ASSESSMENT_GRADING_PENDING입니다. 명시적 데모의 FixedAnswerGrader는 의미 기반 채점이 아닙니다.
+
+v5 채점은 문제 생성과 같은 SHORT_EXACT 포트 정책을 사용합니다. A가 소유권을 확인한 실제 선택 원문에서 만든 인용 후보를 모델에 제공하고, 생성 스키마의 인용 enum·40자 상한 및 서버의 출처 ID/인용 쌍 검사로 검증합니다. 판정을 강제하거나 모델의 인용을 잘라 맞추지 않습니다. 기존 v4의 지시·스키마·입력 및 STANDARD 요청 형식은 보존하며, 동일 attemptId·답안·풀이·문항·설정의 유효한 v4 성공 결과는 기존 출처 규칙을 다시 검사한 뒤 읽기 전용으로 복원합니다. 새 환경 변수나 DB 마이그레이션은 없습니다.
+
+배포나 서버 재시작만으로 미채점 답안을 다시 채점하지 않습니다. 저장된 답안·풀이·attemptId·요청 키를 보존하며, recovery가 허용하는 경우에만 같은 키·본문으로 명시적으로 재제출합니다. 기존 v4 실패 기록은 초기화하지 않습니다. uncertain 또는 만료 running 기록이 있는 세션은 v5에서도 신규 호출을 차단하며, 운영자 확인 절차를 우회하지 않습니다. 실제 유료 API 재검증은 별도 승인 대상입니다.
 
 미로그인 401, CSRF 누락·오류 403, 타인/없는/잘못된 ID 404,
 입력·요청 키 오류 422, JSON 파싱 오류 400입니다. 오류 본문은 기존 code·message와 선택적 recovery이며 비공개 답안을 담지 않습니다. 생성 관련 LearningException의 stage·diagnosticCode·retryAllowed·action을 그대로 전달합니다. CitationRules 길이 위반은 EVIDENCE_QUOTE_TOO_SHORT/TOO_LONG, 출처 개수/중복 근거는 CITATION_CARDINALITY_INVALID 등 안전한 코드로 구분합니다. review_required/limit_reached에서는 로딩과 자동 재전송을 종료하세요.

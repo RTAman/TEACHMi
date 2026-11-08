@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -111,7 +112,10 @@ class GeminiCommonPortIntegrationTest {
     String envelope(JsonNode value) { return GeminiFixtures.envelope(json,json.writeValueAsString(value),"STOP"); }
     String generate(Request request) { return port.generate(request,node -> node.path("result").asText()); }
     Request shortRequest() {
-        var old=request("assessment/problems");
+        return shortRequest("assessment/problems");
+    }
+    Request shortRequest(String operation) {
+        var old=request(operation);
         return new Request(scope,old.operation(),"v5",old.instruction(),old.input(),old.schema(),CitationPolicy.SHORT_EXACT);
     }
     void shortResponse() {
@@ -196,22 +200,25 @@ class GeminiCommonPortIntegrationTest {
         verify(transport).generate(anyString());
     }
 
-    @Test void aValidHistoricalStandardSuccessIsReadWithoutAnyNewReceiptOrQuotaEvenAtTheLimit() {
-        var previous=request("assessment/problems");
+    @ParameterizedTest @ValueSource(strings={"assessment/problems","assessment/grade"})
+    void aValidHistoricalStandardSuccessIsReadWithoutAnyNewReceiptOrQuotaEvenAtTheLimit(String operation) {
+        var base=request(operation);
+        var previous=new Request(scope,operation,"v4",base.instruction(),base.input(),base.schema());
         assertThat(generate(previous)).isEqualTo("원가 배분"); // Old exact quote is valid but is not a candidate.
         var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
         var budget=limits("minute");
         try(var store=new GeminiLedger(database,budget)) {
-            assertThat(scoped(budget,store).<String>generateWithPreviousSuccess(shortRequest(),previous,node -> node.path("result").asText())).isEqualTo("원가 배분");
+            assertThat(scoped(budget,store).<String>generateWithPreviousSuccess(shortRequest(operation),previous,node -> node.path("result").asText())).isEqualTo("원가 배분");
         }
         assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(rows);
         assertThat(calls()).isEqualTo(1);
         verify(transport).generate(anyString());
     }
 
-    @ParameterizedTest @ValueSource(strings={"uncertain","expired"})
-    void shortPolicyNeverBypassesAnUnresolvedStandardRequestOrChangesIt(String state) {
-        var previous=request("assessment/problems");
+    @ParameterizedTest @CsvSource({"assessment/problems,uncertain","assessment/problems,expired","assessment/grade,uncertain","assessment/grade,expired"})
+    void shortPolicyNeverBypassesAnUnresolvedStandardRequestOrChangesIt(String operation,String state) {
+        var base=request(operation);
+        var previous=new Request(scope,operation,"v4",base.instruction(),base.input(),base.schema());
         if(state.equals("uncertain")) {
             doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT")).when(transport).generate(anyString());
             error(() -> generate(previous),"AI_GENERATION_UNCERTAIN");
@@ -220,7 +227,7 @@ class GeminiCommonPortIntegrationTest {
             jdbc.update("UPDATE teachmi.learning_ai_generation SET lease_until=now()-interval '1 second'");
         }
         var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
-        error(() -> port.generateWithPreviousSuccess(shortRequest(),previous,node -> node),"AI_GENERATION_UNCERTAIN");
+        error(() -> port.generateWithPreviousSuccess(shortRequest(operation),previous,node -> node),"AI_GENERATION_UNCERTAIN");
         assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(rows);
         assertThat(calls()).isEqualTo(1);
         verify(transport,times(state.equals("uncertain")?1:0)).generate(anyString());
@@ -248,14 +255,15 @@ class GeminiCommonPortIntegrationTest {
         verifyNoInteractions(transport);
     }
 
-    @Test void anExplicitNewPromptDoesNotRewriteThePreviouslyFailedLongQuoteReceipt() {
-        var base=request("assessment/problems");
+    @ParameterizedTest @ValueSource(strings={"assessment/problems","assessment/grade"})
+    void anExplicitNewPromptDoesNotRewriteThePreviouslyFailedLongQuoteReceipt(String operation) {
+        var base=request(operation);
         var previous=new Request(scope,base.operation(),"v4",base.instruction(),base.input(),base.schema());
         doReturn(envelope(payload("원가 배분"))).when(transport).generate(anyString());
         error(() -> port.generate(previous,node -> {throw new GeminiResponseFailure("EVIDENCE_QUOTE_TOO_LONG");}),"INVALID_GEMINI_RESPONSE");
         var old=jdbc.queryForMap("SELECT * FROM teachmi.learning_ai_generation");
         shortResponse();
-        assertThat(port.<String>generateWithPreviousSuccess(shortRequest(),previous,node -> node.path("result").asText())).isEqualTo("원가 배분");
+        assertThat(port.<String>generateWithPreviousSuccess(shortRequest(operation),previous,node -> node.path("result").asText())).isEqualTo("원가 배분");
         assertThat(jdbc.queryForMap("SELECT * FROM teachmi.learning_ai_generation WHERE generation_key=?",old.get("generation_key"))).isEqualTo(old);
         assertThat(calls()).isEqualTo(2);
     }

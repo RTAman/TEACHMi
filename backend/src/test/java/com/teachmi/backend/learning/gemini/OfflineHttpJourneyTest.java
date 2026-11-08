@@ -216,6 +216,64 @@ class OfflineHttpJourneyTest {
                 && gateway.count()==calls);
         return result;
     }
+    JsonNode attemptRow(String problem) throws Exception {
+        try(var connection=DriverManager.getConnection(dbUrl,dbUser,dbPassword);
+            var query=connection.prepareStatement("SELECT to_jsonb(t)::text FROM teachmi.assessment_attempt t WHERE problem_id=?")) {
+            query.setObject(1,UUID.fromString(problem));
+            try(var rows=query.executeQuery()) {
+                check("exactly one saved attempt exists",rows.next());
+                var result=json.readTree(rows.getString(1));
+                check("attempt was not duplicated",!rows.next());
+                return result;
+            }
+        }
+    }
+    Map<String,String> generationRows() throws Exception {
+        var result=new LinkedHashMap<String,String>();
+        try(var connection=DriverManager.getConnection(dbUrl,dbUser,dbPassword);var statement=connection.createStatement();
+            var rows=statement.executeQuery("SELECT generation_key,to_jsonb(t)::text FROM teachmi.learning_ai_generation t")) {
+            while(rows.next()) result.put(rows.getString(1),rows.getString(2));
+        }
+        return result;
+    }
+    JsonNode submitAfterCitationFailure(Member member,String session,String problem) throws Exception {
+        String key=UUID.randomUUID().toString();
+        var body=Map.of("answer","정답","work","선택한 원문의 조건과 이유를 설명한 오프라인 답안입니다.");
+        String route=path(session)+"/problems/"+problem+"/attempts";
+        var oldRows=generationRows();
+        gateway.fault.set("long-grade-quote");
+        int calls=gateway.count();
+        var failure=exchange(member,"POST",route,body,key,true);
+        check("C grade 42 character citation is rejected",failure.status()==502
+                && failure.body().path("code").asText().equals("INVALID_GEMINI_RESPONSE")
+                && failure.body().path("recovery").path("diagnosticCode").asText().equals("EVIDENCE_QUOTE_TOO_LONG"));
+        check("C grade failure never retries the provider automatically",gateway.count()==calls+1);
+        observe("C-grade-intentional-42-character-quote",failure);
+        var pending=attemptRow(problem);
+        check("failed grade keeps original ungraded answer and request key",pending.path("judgement").isNull()
+                && pending.path("graded_at").isNull() && pending.path("answer").asText().equals(body.get("answer"))
+                && pending.path("work").asText().equals(body.get("work")) && pending.path("request_key").asText().equals(key));
+        var failedRows=generationRows();
+        check("grading failure preserves all prior success and failure rows",oldRows.entrySet().stream()
+                .allMatch(entry -> entry.getValue().equals(failedRows.get(entry.getKey()))));
+        var before=state(member,session);
+        stop();start(true,false);login(member,false);
+        check("ungraded answer restores unchanged after restart",pending.equals(attemptRow(problem)));
+        check("failed grading ledger restores without reset",failedRows.equals(generationRows()));
+        check("restart restores the session without automatic grading",before.equals(state(member,session)) && gateway.count()==calls+1);
+        // Explicit offline retry only: production actual-call approvals are never exercised by this test.
+        var graded=call(member,"POST",route,body,key,201);
+        var stored=attemptRow(problem);
+        check("explicit grading keeps the same saved attempt and answer",graded.path("attemptId").asText().equals(pending.path("id").asText())
+                && stored.path("id").equals(pending.path("id")) && stored.path("answer").equals(pending.path("answer"))
+                && stored.path("work").equals(pending.path("work")) && stored.path("created_at").equals(pending.path("created_at")));
+        check("valid v5 candidate grade is stored",graded.path("judgement").asText().equals("correct")
+                && stored.path("judgement").asText().equals("correct") && !stored.path("graded_at").isNull());
+        check("only the explicit retry dispatches another mock call",gateway.count()==calls+2);
+        check("grading receipt is restored without a duplicate call",graded.equals(call(member,"POST",route,body,key,201))
+                && gateway.count()==calls+2);
+        return graded;
+    }
     void reteach(Member member,String session,String problem,String attempt,boolean help) throws Exception {
         call(member,"POST",path(session)+"/problems/"+problem+"/reteach",
                 Map.of("attemptId",attempt,"expectedVersion",state(member,session).path("version").asLong()),UUID.randomUUID().toString(),200);
@@ -382,7 +440,7 @@ class OfflineHttpJourneyTest {
             String review=session(member,economics);
             mode(member,review,"review");turn(member,review,"dont_know");finishChat(member,review);
             var secondProblems=call(member,"POST",path(review)+"/problems",null,null,200).path("problems");
-            submit(member,review,secondProblems.get(0).path("problemId").asText(),"정답");
+            submitAfterCitationFailure(member,review,secondProblems.get(0).path("problemId").asText());
             submit(member,review,secondProblems.get(1).path("problemId").asText(),"보류");
             var economicsReport=report(member,review);
             check("first try correct and pending review counted",economicsReport.path("application").path("independentCorrect").asInt()==1
@@ -456,8 +514,8 @@ class OfflineHttpJourneyTest {
             stop();start(true,false);
             check("uncertain survives server restart",held.equals(state(bFault,bs)) && ledger.equals(ledger()) && gateway.count()==before);
             check("all uncertain receipts retained",ledger.stream().filter(row -> row.get("state").equals("uncertain")).mapToInt(row -> (Integer)row.get("count")).sum()==3);
-            check("C grading retains v4",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/grade"))
-                    .allMatch(row -> row.get("promptVersion").equals("v4")));
+            check("C grading uses v5 candidates",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/grade"))
+                    .allMatch(row -> row.get("promptVersion").equals("v5")));
             check("C problem generation uses v5 candidates",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/problems"))
                     .allMatch(row -> row.get("promptVersion").equals("v5")));
             check("interactive output budget stays below the global cap",gateway.audit.stream()
