@@ -42,15 +42,15 @@ final class OfflineHttpTransport implements GeminiTransport {
             throw new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT");
         var output=new LinkedHashMap<String,Object>();
         output.put("sourceChunkIds",List.of(id));
-        String quote=source.substring(0,"long-quote".equals(injection)?41:20);
+        String quote=source.substring(0,"long-grade-quote".equals(injection)?42:"long-quote".equals(injection)?41:20);
         if(injection==null && !data.path("citationCandidates").isEmpty())
             quote=data.path("citationCandidates").get(0).path("quote").asText();
-        if(operation.equals("assessment/problems")) {
-            if(data.path("citationCandidates").isEmpty()) throw new AssertionError("C problems require authorized literal candidates");
+        if(operation.startsWith("assessment/")) {
+            if(data.path("citationCandidates").isEmpty()) throw new AssertionError("C operations require authorized literal candidates");
             var quotes=request.path("generationConfig").path("responseJsonSchema").path("properties").path("evidence")
                     .path("items").path("properties").path("quote");
             if(quotes.path("maxLength").asInt()!=40 || quotes.path("enum").isEmpty())
-                throw new AssertionError("C problems require bounded quote choices");
+                throw new AssertionError("C operations require bounded quote choices");
         }
         if("bad-quote".equals(injection)) quote="실제 원문과 일치하지 않는 인용문입니다.";
         output.put("evidence",List.of(Map.of("sourceChunkId",id,"quote",quote)));

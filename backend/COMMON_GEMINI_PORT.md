@@ -7,8 +7,8 @@ GEMINI_ENABLED=true일 때 bean이 생깁니다. 꺼져 있으면 소비자는 O
 
 ## 최신 main과 공통 서비스 호환성
 
-기준 main: a7d15d1af6ba98193065dfef76367f526fb3050d (PR #45 병합).
-문제 생성 v5 후보 정책 보완 후 전체 A·B·C 466개 및 별도 HTTP 여정 327개 검증이 통과했습니다. 아래의 잠금·트랜잭션 계약은 유지하며, 세션 GET에는 읽기 전용 생성 보류 복원을 제공합니다. 실제 Gemini 호출은 수행하지 않았습니다.
+기준 main: ac22610bdf8a7afbc98f97c942c9160aecfcce1e (PR #46 병합).
+채점 v5 후보 정책 보완 후 전체 A·B·C 474개 및 별도 HTTP 여정 350개 검증이 통과했습니다. 아래의 잠금·트랜잭션 계약은 유지하며, 세션 GET에는 읽기 전용 생성 보류 복원을 제공합니다. 이번 보완 작업에서 실제 Gemini 호출은 수행하지 않았습니다.
 
 | 서비스 | 현재 계약과 AI 연결 위치 |
 | --- | --- |
@@ -81,15 +81,17 @@ B와 새 소비자는 같은 GeminiLedger와 전용 최대 2개 연결 풀을 �
 
 ## C 연결과 안전한 오류 계약
 
-C의 GeminiProblemGenerator는 v5/SHORT_EXACT로, GeminiAnswerGrader는 기존 v4/STANDARD로 연결돼 있습니다. 원격 채점은 입력/작업 임대 저장·커밋 → 트랜잭션 밖 생성 → 최신 버전/실행 토큰 검증·결과 저장으로 분리합니다. 문제별 출처, 정답 비공개, attempt 보존과 stale 결과 거절 계약은 유지합니다.
+C의 GeminiProblemGenerator와 GeminiAnswerGrader는 모두 v5/SHORT_EXACT로 연결돼 있습니다. 원격 채점은 입력/작업 임대 저장·커밋 → 트랜잭션 밖 생성 → 최신 버전/실행 토큰 검증·결과 저장으로 분리합니다. 문제별 출처, 정답 비공개, attempt 보존과 stale 결과 거절 계약은 유지합니다.
 
 업무 검증기는 GeminiValidationException과 고정 Diagnostic enum으로 안전한 분류만 전달할 수 있습니다. C CitationRules 규칙은 유지하며 길이/출처 분류를 원장과 recovery에 전달합니다. 임의 예외 메시지는 원문이나 응답 전문과 함께 외부로 내보내지 않으며, 미분류 예외는 DOMAIN_RESPONSE_INVALID로 처리합니다.
 
-### 문제 생성 v5의 짧은 인용 후보
+### 문제 생성·채점 v5의 짧은 인용 후보
 
-SHORT_EXACT 요청은 A의 실제 소유 원문 조회 이후에만 citationCandidates를 만듭니다. 후보는 원문에 연속해서 존재하는 6~40자이며 조각당 8개, 전체 64개로 제한합니다. 원문·사용자 입력은 변경하지 않습니다. 모델에는 출처 ID와 quote를 함께 선택하도록 지시하고, 생성 스키마에는 후보 인용 enum과 maxLength=40, 후보를 제공한 출처 ID enum을 넣습니다. 서버에서는 기존 정확한 원문 검사 후 후보 ID/인용 쌍을 검사합니다. 40자 초과는 EVIDENCE_QUOTE_TOO_LONG, 원문과 다른 인용은 EVIDENCE_QUOTE_NOT_EXACT, 원문에는 있지만 후보 쌍에 없는 인용은 EVIDENCE_CANDIDATE_INVALID로 구분합니다. 후보가 없으면 호출·예약 전에 중단합니다. C의 출처 1~2개·ID당 evidence 1개 규칙은 그대로 검사합니다.
+SHORT_EXACT 요청은 A의 실제 소유 원문 조회 이후에만 citationCandidates를 만듭니다. 후보는 원문에 연속해서 존재하는 6~40자이며 조각당 8개, 전체 64개로 제한합니다. 원문·사용자 입력은 변경하지 않습니다. 모델에는 출처 ID와 quote를 함께 선택하도록 지시하고, 생성 스키마에는 후보 인용 enum과 maxLength=40, 후보를 제공한 출처 ID enum을 넣습니다. 서버에서는 기존 정확한 원문 검사 후 후보 ID/인용 쌍을 검사합니다. 40자 초과는 EVIDENCE_QUOTE_TOO_LONG, 원문과 다른 인용은 EVIDENCE_QUOTE_NOT_EXACT, 원문에는 있지만 후보 쌍에 없는 인용은 EVIDENCE_CANDIDATE_INVALID로 구분합니다. 후보가 없으면 호출·예약 전에 중단합니다. C의 문제 생성 출처 1~2개·채점 출처 1개·ID당 evidence 1개 규칙은 그대로 검사합니다.
 
 generateWithPreviousSuccess(current, previous, validator)는 동일 Scope·작업·입력·스키마의 이전 STANDARD 요청 성공만 읽기 전용으로 조회합니다. 이전 요청은 호출하지 않으며 현재 원문과 이전 요청 계약 및 업무 검증기를 모두 다시 적용합니다. 운영 어댑터는 기존 성공 키 조회 경로를 사용합니다. 대체 포트의 기본 메서드는 현재 요청만 처리하므로 테스트 대역도 기존 generate 구현으로 교체할 수 있습니다. C는 v4의 지시·입력·스키마·요청 JSON을 보존하고 v5의 새 후보 정책을 과거 성공 데이터에 소급하지 않습니다. 키 해시 계산식, 공유 사용량 한도, 임대·attempt 제한, uncertain 차단 및 B의 과거 요청/캐시는 변경하지 않습니다. 새 환경 변수와 DB 마이그레이션은 없습니다.
+
+채점의 과거 성공 조회에도 동일 attemptId·문항·정답·풀이 기준·제출 답안과 풀이가 필요합니다. 다른 답안의 성공을 재사용하지 않습니다. correct/wrong/pending_review 판정과 정답을 노출하는 reteachFocus를 가리는 기존 검증은 유지합니다. 미채점 답안이나 실패 원장을 배포 시 초기화하지 않으며, 재시작 시 자동 채점도 하지 않습니다. 실제 API 재제출은 recovery와 별도 실호출 승인을 따릅니다.
 
 C HTTP 오류도 LearningException의 선택적 recovery를 전달합니다. 마지막 허용 시도의 검증 실패는 기존 502·INVALID_GEMINI_RESPONSE와 구체 진단을 유지하면서 retryAllowed=false/action=limit_reached를 반환합니다. 일반 인증·자료 오류의 code/message 형태는 유지합니다.
 
