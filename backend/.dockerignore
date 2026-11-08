@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!build/
+!build/libs/
+!build/libs/teachmi-backend-0.0.1-SNAPSHOT.jar
+!deploy/
+!deploy/bin/
+!deploy/bin/healthcheck.sh

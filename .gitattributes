@@ -1,0 +1,3 @@
+backend/Dockerfile text eol=lf
+backend/.dockerignore text eol=lf
+backend/deploy/** text eol=lf

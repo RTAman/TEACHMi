@@ -49,3 +49,40 @@ jobs:
           DB_USER: teachmi
           DB_PASSWORD: teachmi_local_only
         run: ./gradlew --no-daemon offlineHttpTest
+      - name: Validate deployment operator safety without starting containers
+        run: python3 -m unittest discover -s deploy/tests -p test_ops.py -v
+
+  deployment-package:
+    needs: build
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      GEMINI_ENABLED: 'false'
+      GEMINI_API_KEY: ''
+      TEACHMI_DEPLOY_TEST: 'true'
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-java@v6.2.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: docker/setup-buildx-action@v4
+      - name: Package the already-tested source
+        run: ./gradlew --no-daemon bootJar
+      - name: Verify private containers, proxy, backup and new database restore
+        env:
+          # Both build and runtime checks use the runner's native architecture.
+          DOCKER_DEFAULT_PLATFORM: linux/${{ matrix.arch }}
+        run: python3 deploy/tests/container_smoke.py --arch ${{ matrix.arch }}
