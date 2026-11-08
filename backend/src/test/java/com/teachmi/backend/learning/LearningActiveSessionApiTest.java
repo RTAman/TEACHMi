@@ -137,9 +137,11 @@ class LearningActiveSessionApiTest {
         var generating = assertMatches(id);
         assertThat(generating.path("pendingTurn").path("state").asText()).isEqualTo("generating");
         assertThat(generating.path("availableActions").get(0).asText()).isEqualTo("wait");
+        assertThat(generating.has("recovery")).as("normal processing is distinct from a terminal hold").isFalse();
         turnTransactions.fail(claim, "TEST_GENERATION_FAILED");
         var failed = assertMatches(id);
         assertThat(failed.path("availableActions").get(0).asText()).isEqualTo("retry_turn");
+        assertThat(failed.has("recovery")).as("ordinary retriable failure keeps the original response shape").isFalse();
         assertThat(failed.path("pendingTurn").path("idempotencyKey").asText()).isEqualTo("saved-answer");
         assertThat(failed.path("pendingTurn").path("expectedVersion").asLong()).isEqualTo(originalVersion);
         assertThat(failed.path("messages").get(1).path("text").asText()).isEqualTo("저장된 설명");

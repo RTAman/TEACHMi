@@ -107,6 +107,7 @@ class LearningOpenApiContractTest {
                 Map.entry("OriginalLearning", LearningEvidenceView.OriginalLearning.class), Map.entry("Summary", LearningContentGenerator.Summary.class),
                 Map.entry("ConceptSnapshot", ConceptSource.Snapshot.class), Map.entry("Resume", SessionView.Resume.class),
                 Map.entry("ErrorBody", LearningErrorHandler.ErrorBody.class),
+                Map.entry("GenerationRecovery", GenerationRecovery.class),
                 Map.entry("CreateSessionRequest", CreateSessionRequest.class), Map.entry("ChooseModeRequest", ChooseModeRequest.class),
                 Map.entry("StartChatRequest", StartChatRequest.class), Map.entry("TurnRequest", TurnRequest.class),
                 Map.entry("StartReteachRequest", StartReteachRequest.class));
@@ -193,6 +194,36 @@ class LearningOpenApiContractTest {
         var badJson = post(path(id) + "/turns").principal(() -> "member-1").header("Idempotency-Key", "json")
                 .contentType("application/json").content("{");
         exchange(badJson, 400, false);
+    }
+
+    @Test void uncertainRecoveryMetadataAndRestoredWaitActionMatchTheContract() throws Exception {
+        String id=create().path("sessionId").asText();
+        write(put(path(id)+"/mode"),"mode",Map.of("mode","review","expectedVersion",0),200,true);
+        doThrow(new LearningException(503,"AI_GENERATION_UNCERTAIN","확인 필요",null,
+                GenerationRecovery.review("TRANSPORT","TRANSPORT_REQUEST_TIMEOUT"))).when(dialogue).reply(any());
+        var body=Map.of("kind","answer","text","저장할 입력","expectedVersion",version(id));
+        var error=write(post(path(id)+"/turns"),"uncertain",body,503,true);
+        assertThat(error.path("recovery").path("retryAllowed").asBoolean()).isFalse();
+        var restored=read(id);
+        assertThat(restored.path("availableActions").get(0).asText()).isEqualTo("wait");
+        assertThat(restored.path("recovery").path("action").asText()).isEqualTo("review_required");
+        assertThat(restored.path("recovery").path("retryAllowed").asBoolean()).isFalse();
+        var repeat=write(post(path(id)+"/turns"),"uncertain",body,503,true);
+        assertThat(repeat.path("recovery").path("stage").asText()).isEqualTo("RECOVERY_GUARD");
+    }
+
+    @Test void firstAttemptLimitErrorAndTerminalSessionStatusMatchTheAdditiveContract() throws Exception {
+        String id=create().path("sessionId").asText();
+        write(put(path(id)+"/mode"),"mode",Map.of("mode","review","expectedVersion",0),200,true);
+        doThrow(new LearningException(429,"AI_ATTEMPT_LIMIT","시도 한도에 도달했습니다.")).when(dialogue).reply(any());
+        var body=Map.of("kind","answer","text","저장된 입력","expectedVersion",version(id));
+        var failure=write(post(path(id)+"/turns"),"limit",body,429,true);
+        assertThat(failure.path("recovery").path("action").asText()).isEqualTo("limit_reached");
+        var loaded=read(id);
+        assertThat(loaded.path("recovery").path("action").asText()).isEqualTo("limit_reached");
+        assertThat(loaded.path("recovery").path("retryAllowed").asBoolean()).isFalse();
+        assertThat(loaded.path("availableActions").get(0).asText()).isEqualTo("wait");
+        write(post(path(id)+"/turns"),"limit",body,429,true);
     }
 
     @Test void crossFieldInvalidInputsAndMissingKeysAreInvalidInBothSpecAndServer() throws Exception {

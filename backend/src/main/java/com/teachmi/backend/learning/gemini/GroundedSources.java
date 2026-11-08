@@ -33,22 +33,24 @@ final class GroundedSources {
         chunks.forEach(chunk -> texts.put(chunk.id(),chunk.text()));
         var cited = new HashSet<String>();
         var ids = result.path("sourceChunkIds");
-        if (!result.isObject() || !ids.isArray() || ids.isEmpty()) throw new IllegalArgumentException("Missing citations");
+        if (!result.isObject() || !ids.isArray() || ids.isEmpty()) throw new GeminiResponseFailure("CITATION_IDS_MISSING");
         for (var id:ids) {
-            if (!id.isString() || !texts.containsKey(id.asText()) || !cited.add(id.asText()))
-                throw new IllegalArgumentException("Invalid citation");
+            if (!id.isString() || !texts.containsKey(id.asText())) throw new GeminiResponseFailure("CITATION_ID_INVALID");
+            if (!cited.add(id.asText())) throw new GeminiResponseFailure("CITATION_ID_DUPLICATE");
         }
         var evidence = result.path("evidence");
-        if (!evidence.isArray() || evidence.isEmpty()) throw new IllegalArgumentException("Missing evidence");
+        if (!evidence.isArray() || evidence.isEmpty()) throw new GeminiResponseFailure("EVIDENCE_MISSING");
         var grounded = new HashSet<String>();
         for (var entry:evidence) {
             var id=entry.path("sourceChunkId"); var quote=entry.path("quote");
-            if (!entry.isObject() || entry.size()!=2 || !id.isString() || !cited.contains(id.asText())
-                    || !quote.isString() || quote.asText().length()<6 || !texts.get(id.asText()).contains(quote.asText()))
-                throw new IllegalArgumentException("Invalid evidence");
+            if (!entry.isObject() || entry.size()!=2 || !id.isString() || !quote.isString())
+                throw new GeminiResponseFailure("EVIDENCE_STRUCTURE_INVALID");
+            if (!cited.contains(id.asText())) throw new GeminiResponseFailure("EVIDENCE_ID_UNCITED");
+            if (quote.asText().length()<6) throw new GeminiResponseFailure("EVIDENCE_QUOTE_TOO_SHORT");
+            if (!texts.get(id.asText()).contains(quote.asText())) throw new GeminiResponseFailure("EVIDENCE_QUOTE_NOT_EXACT");
             grounded.add(id.asText());
         }
-        if (!grounded.equals(cited)) throw new IllegalArgumentException("Unsubstantiated citation");
+        if (!grounded.equals(cited)) throw new GeminiResponseFailure("EVIDENCE_COVERAGE_MISMATCH");
     }
     private static LearningException incomplete(String message) {
         return new LearningException(503,"LEARNING_SOURCE_INCOMPLETE",message);

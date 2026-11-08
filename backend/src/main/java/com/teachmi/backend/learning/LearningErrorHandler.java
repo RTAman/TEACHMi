@@ -8,12 +8,16 @@ import jakarta.validation.ConstraintViolationException;
 
 @RestControllerAdvice(assignableTypes = LearningSessionController.class)
 class LearningErrorHandler {
-    record ErrorBody(String code, String message, SessionView currentSession) {}
+    record ErrorBody(String code, String message, SessionView currentSession,
+                     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                     GenerationRecovery recovery) {
+        ErrorBody(String code,String message,SessionView session) { this(code,message,session,null); }
+    }
 
     @ExceptionHandler(LearningException.class)
     ResponseEntity<ErrorBody> learning(LearningException ex) {
         return ResponseEntity.status(ex.status)
-                .body(new ErrorBody(ex.code, ex.getMessage(), ex.currentSession));
+                .body(new ErrorBody(ex.code, ex.getMessage(), ex.currentSession,ex.recovery));
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, ConstraintViolationException.class})

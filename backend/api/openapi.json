@@ -169,7 +169,8 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           }
-        }
+        },
+        "description": "재접속 GET은 선택적 recovery로 터미널 보류 상태를 복원합니다. AI_GENERATION_UNCERTAIN/AI_ATTEMPT_LIMIT이면 availableActions=wait이지만 자동 완료 대기가 아닙니다."
       }
     },
     "/api/v1/sessions/{sessionId}/mode": {
@@ -318,7 +319,7 @@
       "post": {
         "operationId": "sendLearningTurn",
         "summary": "답변·힌트·쉬운 예시·모르겠어요",
-        "description": "입력을 먼저 저장. 충분한 answer만 case→concept→reason→wrapup→problem. 도움은 단계 유지. 실패 후 pendingTurn의 원래 키/expectedVersion/text로 재전송; GET version으로 본문을 바꾸지 마세요.",
+        "description": "입력을 먼저 저장. 충분한 answer만 case→concept→reason→wrapup→problem. 도움은 단계 유지. 실패 후 pendingTurn의 원래 키/expectedVersion/text로 재전송; GET version으로 본문을 바꾸지 마세요. AI_GENERATION_UNCERTAIN이면 입력을 보존하고 availableActions=wait로 복원합니다. recovery.retryAllowed=false일 때 키/본문/모델/출력 설정을 바꿔 재호출하지 말고 호출 결과를 확인하세요.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"
@@ -1439,6 +1440,9 @@
             "items": {
               "$ref": "#/components/schemas/ReteachView"
             }
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/GenerationRecovery"
           }
         }
       },
@@ -1459,9 +1463,12 @@
           },
           "currentSession": {
             "$ref": "#/components/schemas/NullableSessionView"
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/GenerationRecovery"
           }
         },
-        "description": "B의 LearningException/입력 검증 응답. 오류 코드와 복원할 currentSession을 사용하세요. Spring이 처리하는 400/405/415 본문 규격은 별도이며 고정되지 않았습니다."
+        "description": "B의 LearningException/입력 검증 응답. 오류 코드와 복원할 currentSession을 사용하세요. Spring이 처리하는 400/405/415 본문 규격은 별도이며 고정되지 않았습니다. AI 오류는 선택적 recovery로 진단 단계와 재시도 가능 여부를 안내합니다. review_required이면 자동 재호출하지 마세요."
       },
       "SupportCounts": {
         "type": "object",
@@ -2144,6 +2151,9 @@
             "items": {
               "$ref": "#/components/schemas/ReteachView"
             }
+          },
+          "recovery": {
+            "$ref": "#/components/schemas/GenerationRecovery"
           }
         },
         "nullable": true
@@ -2289,6 +2299,49 @@
             "type": "string"
           }
         }
+      },
+      "GenerationRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "stage",
+          "diagnosticCode",
+          "retryAllowed",
+          "action"
+        ],
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "TRANSPORT",
+              "RESPONSE_VALIDATION",
+              "CACHE_VALIDATION",
+              "LEDGER_CLAIM",
+              "LEDGER_SUCCESS_WRITE",
+              "LEDGER_FAILURE_WRITE",
+              "RECOVERY_GUARD"
+            ]
+          },
+          "diagnosticCode": {
+            "type": "string",
+            "maxLength": 96,
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "review_required",
+              "wait",
+              "retry_same_request",
+              "check_configuration",
+              "limit_reached"
+            ]
+          }
+        },
+        "description": "고정된 비밀정보 없는 진단만 제공합니다. retryAllowed는 실제 한도 내 명시적 재전송만 뜻하며 자동 재시도를 허용하지 않습니다. SessionView에도 선택적으로 제공됩니다. review_required와 limit_reached는 시간 경과로 해제되지 않으므로 로딩·자동 폴링·자동 POST를 종료하세요. 이전 응답에 recovery가 없으면 pendingTurn/activeReteach.errorCode를 먼저 확인하고 availableActions=wait만으로 처리 중이라고 판단하지 마세요."
       }
     },
     "securitySchemes": {
