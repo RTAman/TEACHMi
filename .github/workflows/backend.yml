@@ -64,7 +64,6 @@ jobs:
       GEMINI_ENABLED: 'false'
       GEMINI_API_KEY: ''
       TEACHMI_DEPLOY_TEST: 'true'
-      DOCKER_DEFAULT_PLATFORM: linux/${{ matrix.arch }}
     defaults:
       run:
         working-directory: backend
@@ -82,4 +81,7 @@ jobs:
       - name: Package the already-tested source
         run: ./gradlew --no-daemon bootJar
       - name: Verify private containers, proxy, backup and new database restore
+        env:
+          # Apply only after the native QEMU/binfmt installer has completed.
+          DOCKER_DEFAULT_PLATFORM: linux/${{ matrix.arch }}
         run: python3 deploy/tests/container_smoke.py --arch ${{ matrix.arch }}

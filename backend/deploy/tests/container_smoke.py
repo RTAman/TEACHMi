@@ -137,7 +137,13 @@ def main():
                     break
                 time.sleep(1)
             check(status == 200 and material["status"] == "done", "PDF analysis in packaged runtime")
-            concept = material["concepts"][0]
+            # Synthetic one-sentence PDFs need not produce an automatic candidate.
+            # Select a grounded custom concept through A's existing public API.
+            check(bool(material["sources"]), "Parsed PDF has source chunks")
+            status, _, concept = app_request(operation, "POST", "/api/v1/materials/" + material_id + "/concepts",
+                json.dumps({"name": "Depreciation", "scope": "Allocate asset cost across useful life",
+                            "sourceChunkIds": [material["sources"][0]["chunkId"]]}).encode(), cookie, csrf)
+            check(status == 201, "Grounded concept selection")
             body = {"materialId": material_id, "conceptId": concept["conceptId"]}
             args_session = ["exec", "-T", "app", "curl", "--noproxy", "*", "-sS", "-H", "Content-Type: application/json",
                             "-H", "Cookie: " + cookie, "-H", "X-CSRF-Token: " + csrf, "-H", "Idempotency-Key: " + uuid.uuid4().hex,

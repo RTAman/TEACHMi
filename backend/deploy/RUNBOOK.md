@@ -105,7 +105,7 @@ sudo python3 deploy/ops.py --env-file /etc/teachmi/production.env --project teac
 ```sh
 sudo python3 deploy/ops.py --env-file /etc/teachmi/production.env --project teachmi-prod restore-new \
   --archive /var/backups/teachmi/release_YYYYMMDD_HHMM.dump \
-  --database teachmi_restore_YYYYMMDD --confirm-database teachmi_restore_YYYYMMDD
+  --database teachmi_restore_20261109 --confirm-database teachmi_restore_20261109
 ```
 
 실제 이름은 소문자·숫자·밑줄만 사용한다. 도구는 해시 확인 후 **존재하지 않는 새 DB**만 생성한다. 현재 DB나 이미 존재하는 복원 DB는 거절한다. 실패해도 원본 DB/백업은 남고 새 DB를 자동 삭제하지 않는다. 역할 `teachmi_app`로 소유권을 맞춘 단일 트랜잭션 복원이다. [PostgreSQL 17 pg_restore](https://www.postgresql.org/docs/17/app-pgrestore.html)
