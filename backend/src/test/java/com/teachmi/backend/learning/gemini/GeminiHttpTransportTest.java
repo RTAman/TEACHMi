@@ -84,17 +84,20 @@ class GeminiHttpTransportTest {
         delayMillis = 1000;
         var error = catchThrowableOfType(() -> client(Duration.ofMillis(200)).generate("{}"), GeminiCallFailure.class);
         assertThat(error.uncertain).isTrue();
+        assertThat(error.diagnostic).isEqualTo("TRANSPORT_REQUEST_TIMEOUT");
     }
 
     @Test void serverFailureIsNotBlindlyRetried() {
         status = 503;
         var error = catchThrowableOfType(() -> client(Duration.ofSeconds(2)).generate("{}"), GeminiCallFailure.class);
         assertThat(error.uncertain).isTrue();
+        assertThat(error.diagnostic).isEqualTo("UPSTREAM_HTTP_503");
     }
 
     @Test void rejectsOversizeResponses() {
         body = "x".repeat(140000);
-        assertThatThrownBy(() -> client(Duration.ofSeconds(2)).generate("{}")).isInstanceOf(GeminiCallFailure.class);
+        var failure=catchThrowableOfType(() -> client(Duration.ofSeconds(2)).generate("{}"),GeminiCallFailure.class);
+        assertThat(failure.diagnostic).isEqualTo("TRANSPORT_RESPONSE_TOO_LARGE");
     }
 
     @Test void rejectedCredentialsDoNotExposeProviderDetails() {

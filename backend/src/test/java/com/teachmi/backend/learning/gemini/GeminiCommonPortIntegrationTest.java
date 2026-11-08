@@ -199,7 +199,7 @@ class GeminiCommonPortIntegrationTest {
         assertThat(generate(request)).isEqualTo("원가 배분");
         assertThat(calls()).isEqualTo(1);
     }
-    @ParameterizedTest @ValueSource(strings={"not-json","blocked","truncated","unknown-id","bad-quote","missing-evidence",
+    @ParameterizedTest @ValueSource(strings={"not-json","bad-payload-json","null-payload","blocked","truncated","unknown-id","bad-quote","missing-evidence",
             "duplicate-id","wrong-type","extra","missing-field"})
     void badResponsesAreNeverSavedAsSuccessAndExplicitRetryIsBounded(String defect) {
         var value=(tools.jackson.databind.node.ObjectNode)payload("원가 배분");
@@ -214,6 +214,8 @@ class GeminiCommonPortIntegrationTest {
         }
         String response=switch(defect) {
             case "not-json" -> "not-json";
+            case "bad-payload-json" -> GeminiFixtures.envelope(json,"{broken private content","STOP");
+            case "null-payload" -> GeminiFixtures.envelope(json,"null","STOP");
             case "blocked" -> "{\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}";
             case "truncated" -> GeminiFixtures.envelope(json,json.writeValueAsString(value),"MAX_TOKENS");
             default -> envelope(value);
@@ -223,6 +225,20 @@ class GeminiCommonPortIntegrationTest {
         error(() -> generate(request),"INVALID_GEMINI_RESPONSE");
         assertThat(calls()).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT state FROM teachmi.learning_ai_generation",String.class)).isEqualTo("failed");
+        String diagnostic=switch(defect) {
+            case "not-json" -> "ENVELOPE_JSON_INVALID";
+            case "bad-payload-json" -> "CONTENT_JSON_INVALID";
+            case "null-payload" -> "JSON_SCHEMA_INVALID";
+            case "blocked" -> "PROMPT_BLOCKED";
+            case "truncated" -> "RESPONSE_MAX_TOKENS";
+            case "bad-quote" -> "EVIDENCE_QUOTE_NOT_EXACT";
+            case "missing-evidence" -> "EVIDENCE_MISSING";
+            case "duplicate-id" -> "CITATION_ID_DUPLICATE";
+            case "wrong-type","extra","missing-field" -> "JSON_SCHEMA_INVALID";
+            default -> "CITATION_ID_INVALID";
+        };
+        assertThat(jdbc.queryForObject("SELECT last_error_code FROM teachmi.learning_ai_generation",String.class))
+                .isEqualTo(diagnostic);
         doReturn(envelope(payload("원가 배분"))).when(transport).generate(anyString());
         assertThat(generate(request)).isEqualTo("원가 배분");
         assertThat(calls()).isEqualTo(2);
@@ -232,6 +248,36 @@ class GeminiCommonPortIntegrationTest {
         var request=request("assessment/problems");
         error(() -> generate(request),"AI_GENERATION_UNCERTAIN");
         error(() -> generate(request),"AI_GENERATION_UNCERTAIN");
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+        assertThat(jdbc.queryForObject("SELECT state FROM teachmi.learning_ai_generation",String.class)).isEqualTo("uncertain");
+    }
+
+    @Test void successReceiptWriteFailureLeavesRunningAndDoesNotSendAnotherRequest() {
+        var broken=mock(GeminiLedger.class);
+        doAnswer(call -> ledger.claim(call.getArgument(0),call.getArgument(1,String.class),
+                call.getArgument(2),call.getArgument(3))).when(broken).claim(anyString(),anyString(),any(),anyInt());
+        doThrow(new IllegalStateException("private persistence failure")).when(broken).succeed(anyString(),anyString());
+        var request=request("assessment/problems");
+        error(() -> scoped(settings,broken).generate(request,node -> node.path("result").asText()),"AI_GENERATION_UNCERTAIN");
+        assertThat(jdbc.queryForObject("SELECT state FROM teachmi.learning_ai_generation",String.class)).isEqualTo("running");
+        error(() -> generate(request),"AI_GENERATION_IN_PROGRESS");
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @Test void failureReceiptWriteFailureLeavesRunningAndDoesNotSendAnotherRequest() {
+        var broken=mock(GeminiLedger.class);
+        doAnswer(call -> ledger.claim(call.getArgument(0),call.getArgument(1,String.class),
+                call.getArgument(2),call.getArgument(3))).when(broken).claim(anyString(),anyString(),any(),anyInt());
+        doThrow(new IllegalStateException("private persistence failure")).when(broken)
+                .fail(anyString(),anyBoolean(),anyInt(),anyString());
+        doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"UPSTREAM_HTTP_503"))
+                .when(transport).generate(anyString());
+        var request=request("assessment/problems");
+        error(() -> scoped(settings,broken).generate(request,node -> node.path("result").asText()),"AI_GENERATION_UNCERTAIN");
+        assertThat(jdbc.queryForObject("SELECT state FROM teachmi.learning_ai_generation",String.class)).isEqualTo("running");
+        error(() -> generate(request),"AI_GENERATION_IN_PROGRESS");
         assertThat(calls()).isEqualTo(1);
         verify(transport).generate(anyString());
     }
@@ -246,6 +292,49 @@ class GeminiCommonPortIntegrationTest {
         error(() -> generate(request),"INVALID_GEMINI_RESPONSE");
         error(() -> generate(request),"AI_ATTEMPT_LIMIT");
         assertThat(calls()).isEqualTo(2);
+    }
+
+    @Test void uncertaintyCannotBeBypassedByVersionModelOrOutputLimitAndOldRowsStayIdentical() {
+        doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT")).when(transport).generate(anyString());
+        var base=request("assessment/problems");
+        error(() -> generate(base),"AI_GENERATION_UNCERTAIN");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        error(() -> generate(new Request(scope,base.operation(),"v2",base.instruction(),base.input(),base.schema())),"AI_GENERATION_UNCERTAIN");
+        var changedModel=new GeminiSettings(settings.apiKey(),"another-model",settings.connectTimeout(),settings.requestTimeout(),100,100,100,2,16000,2048);
+        var changedOutput=new GeminiSettings(settings.apiKey(),settings.model(),settings.connectTimeout(),settings.requestTimeout(),100,100,100,2,16000,6144);
+        error(() -> scoped(changedModel,ledger).generate(base,node -> node),"AI_GENERATION_UNCERTAIN");
+        error(() -> scoped(changedOutput,ledger).generate(base,node -> node),"AI_GENERATION_UNCERTAIN");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(1);verify(transport).generate(anyString());
+    }
+
+    @Test void anExistingSuccessCanStillBeRestoredWhileAnotherOperationIsUncertain() {
+        var success=request("assessment/problems");generate(success);
+        doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0)).when(transport).generate(anyString());
+        error(() -> generate(request("assessment/grade")),"AI_GENERATION_UNCERTAIN");
+        assertThat(generate(success)).isEqualTo("원가 배분");assertThat(calls()).isEqualTo(2);
+    }
+
+    @Test void expiredRunningReceiptBlocksANewHashWithoutBeingReclaimed() {
+        ledger.claim("old-version",scope.memberId(),scope.sessionId(),100);
+        jdbc.update("UPDATE teachmi.learning_ai_generation SET lease_until=now()-interval '1 second' WHERE generation_key='old-version'");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var failure=catchThrowableOfType(() -> generate(request("assessment/problems")),LearningException.class);
+        assertThat(failure.code()).isEqualTo("AI_GENERATION_UNCERTAIN");
+        assertThat(failure.recovery().diagnosticCode()).isEqualTo("GENERATION_LEASE_EXPIRED");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(1);verifyNoInteractions(transport);
+    }
+
+    @Test void legacyTimeoutDiagnosticIsMappedWithoutChangingOrExposingTheHistoricalRow() {
+        ledger.claim("old",scope.memberId(),scope.sessionId(),100);
+        ledger.fail("old",true,0,"TRANSPORT_HttpTimeoutException");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var failure=catchThrowableOfType(() -> generate(request("assessment/problems")),LearningException.class);
+        assertThat(failure.recovery().diagnosticCode()).isEqualTo("TRANSPORT_REQUEST_TIMEOUT");
+        assertThat(failure.recovery().retryAllowed()).isFalse();
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        verifyNoInteractions(transport);
     }
     @Test void domainValidationRunsBeforeCachingAndOnCacheHits() {
         var request=request("assessment/grade");

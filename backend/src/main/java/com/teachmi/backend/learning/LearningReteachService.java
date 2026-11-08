@@ -24,7 +24,7 @@ public class LearningReteachService {
             return transactions.complete(claim, java.util.Objects.requireNonNull(generator.opening(claim.context())));
         } catch (LearningException ex) {
             var current = transactions.fail(claim, ex.code());
-            throw new LearningException(ex.status, ex.code(), ex.getMessage(), current);
+            throw ex.withSession(current);
         } catch (RuntimeException ex) {
             var current = transactions.fail(claim, "RETEACH_GENERATION_FAILED");
             throw new LearningException(502, "RETEACH_GENERATION_FAILED", "재설명 질문 생성에 실패했습니다. 같은 요청으로 다시 시도하세요.", current);

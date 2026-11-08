@@ -14,18 +14,21 @@ import com.teachmi.backend.learning.LearningContentGenerator;
 import com.teachmi.backend.learning.LearningException;
 import com.teachmi.backend.learning.LearningSourceReader;
 import com.teachmi.backend.learning.LearningSessionService;
+import com.teachmi.backend.learning.GenerationRecovery;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.SerializationFeature;
 
 /** Shared execution, grounding and durable quota/cache pipeline. Transport and ledger have one owner. */
 final class GeminiGenerationService {
+    private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(GeminiGenerationService.class);
     private final GeminiSettings settings;
     private final ObjectProvider<LearningSourceReader> sources;
     private final GeminiTransport transport;
     private final GeminiLedger ledger;
     private final ObjectMapper json;
     private final ObjectProvider<LearningSessionService> sessions;
+    private record Previous<T>(String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {}
     GeminiGenerationService(GeminiSettings settings,ObjectProvider<LearningSourceReader> sources,
                             GeminiTransport transport,GeminiLedger ledger,ObjectMapper json) {
         this(settings,sources,transport,ledger,json,null);
@@ -70,7 +73,8 @@ final class GeminiGenerationService {
             throw new LearningException(503,"LEARNING_SOURCE_INCOMPLETE","개념의 출처와 원문 목록이 다릅니다.");
         return execute(request.scope(),"teachmi-common-v1\n"+request.operation()+"\n"+request.promptVersion(),
                 chunks -> request(request,chunks,selection.concept()), result -> {
-                    JsonResponseSchema.validate(result,fullSchema(request.schema(),request.scope().sourceChunkIds()));
+                    try { JsonResponseSchema.validate(result,fullSchema(request.schema(),request.scope().sourceChunkIds())); }
+                    catch (IllegalArgumentException invalid) { throw new GeminiResponseFailure("JSON_SCHEMA_INVALID"); }
                     return validator.validate(result);
                 });
     }
@@ -82,7 +86,17 @@ final class GeminiGenerationService {
                 context.concept().sourceChunkIds()),version,composer,validator);
     }
 
+    <T> T legacyWithPreviousSuccess(LearningContentGenerator.Context context,String version,
+            Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,String previousVersion,
+            Function<List<LearningSourceReader.Chunk>,String> previousComposer,Validator<T> previousValidator) {
+        return execute(new Scope(context.memberId(),context.sessionId(),context.materialId(),context.conceptId(),
+                context.concept().sourceChunkIds()),version,composer,validator,new Previous<>(previousVersion,previousComposer,previousValidator));
+    }
+
     private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {
+        return execute(scope,version,composer,validator,null);
+    }
+    private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,Previous<T> previous) {
         var reader=sources.getIfAvailable();
         if(reader==null) throw new LearningException(503,"LEARNING_SOURCE_INTEGRATION_PENDING","A의 자료 소유권 검증·원문 조회 연결이 필요합니다.");
         if(settings.apiKey().isBlank() || !settings.model().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,99}")) {
@@ -92,10 +106,22 @@ final class GeminiGenerationService {
                 scope.sourceChunkIds()),settings.maxSourceChars());
         var request=composer.apply(chunks);
         var key=hash(version+"\n"+settings.model()+"\n"+request);
-        var cached=ledger.claim(key,scope.memberId(),scope.sessionId(),request.getBytes(StandardCharsets.UTF_8).length);
+        if(previous!=null) {
+            String saved=ledger.succeeded(key,scope.memberId(),scope.sessionId());
+            if(saved!=null) return cached(saved,chunks,validator);
+            String oldRequest=previous.composer().apply(chunks);
+            String oldKey=hash(previous.version()+"\n"+settings.model()+"\n"+oldRequest);
+            String historical=ledger.succeeded(oldKey,scope.memberId(),scope.sessionId());
+            if(historical!=null) return cached(historical,chunks,previous.validator());
+        }
+        String cached;
+        try { cached=ledger.claim(key,scope.memberId(),scope.sessionId(),request.getBytes(StandardCharsets.UTF_8).length); }
+        catch(LearningException failure) {
+            LOG.warn("Gemini stage=LEDGER_CLAIM code={}",failure.code());
+            throw failure;
+        }
         if(cached!=null) {
-            try { return validate(cached,chunks,validator); }
-            catch(RuntimeException invalid) { throw invalidResponse(); }
+            return cached(cached,chunks,validator);
         }
         String payload;
         T result;
@@ -103,27 +129,44 @@ final class GeminiGenerationService {
             payload=extract(transport.generate(request));
             result=validate(payload,chunks,validator);
         } catch(GeminiCallFailure failure) {
-            fail(key,failure.uncertain,failure.retrySeconds,failure.diagnostic);
-            throw new LearningException(failure.status,failure.code,"Gemini 호출을 완료하지 못했습니다.");
+            String detail=GeminiDiagnostics.safe(failure.diagnostic);
+            LOG.warn("Gemini stage=TRANSPORT diagnostic={}",detail);
+            fail(key,failure.uncertain,failure.retrySeconds,detail);
+            var recovery=failure.uncertain?GenerationRecovery.review("TRANSPORT",detail)
+                    :new GenerationRecovery("TRANSPORT",detail,false,failure.status==429?"wait":"check_configuration");
+            throw new LearningException(failure.status,failure.code,failure.uncertain?
+                    "생성 응답을 확인하지 못했습니다. 답변을 다시 보내기 전에 호출 결과를 확인하세요.":"Gemini 호출을 완료하지 못했습니다.",null,recovery);
         } catch(RuntimeException invalid) {
-            fail(key,false,0,"INVALID_GEMINI_RESPONSE");
-            throw invalidResponse();
+            var diagnostic=diagnostic(invalid);
+            LOG.warn("Gemini stage=RESPONSE_VALIDATION diagnostic={}",diagnostic);
+            fail(key,false,0,diagnostic);
+            throw invalidResponse("RESPONSE_VALIDATION",diagnostic,true);
         }
         try { ledger.succeed(key,payload); }
         catch(RuntimeException persistence) {
-            throw new LearningException(503,"AI_GENERATION_UNCERTAIN","생성 결과 저장 확인이 필요합니다.");
+            LOG.warn("Gemini stage=LEDGER_SUCCESS_WRITE diagnostic=LEDGER_SUCCESS_WRITE_FAILED");
+            throw GeminiDiagnostics.uncertain("LEDGER_SUCCESS_WRITE","LEDGER_SUCCESS_WRITE_FAILED","생성 결과 저장 확인이 필요합니다. 자동 재호출하지 마세요.");
         }
         return result;
     }
+    private <T> T cached(String payload,List<LearningSourceReader.Chunk> chunks,Validator<T> validator) {
+        try { return validate(payload,chunks,validator); }
+        catch(RuntimeException invalid) {
+            String detail=diagnostic(invalid);LOG.warn("Gemini stage=CACHE_VALIDATION diagnostic={}",detail);
+            throw invalidResponse("CACHE_VALIDATION",detail,false);
+        }
+    }
     private <T> T validate(String payload,List<LearningSourceReader.Chunk> chunks,Validator<T> validator) {
-        var parsed=json.readTree(payload);
+        var parsed=readJson(payload,"CONTENT_JSON_INVALID");
+        if(parsed==null || !parsed.isObject()) throw new GeminiResponseFailure("JSON_SCHEMA_INVALID");
         GroundedSources.citations(parsed,chunks);
         return Objects.requireNonNull(validator.validate(parsed));
     }
     private void fail(String key,boolean uncertain,int retrySeconds,String diagnostic) {
         try { ledger.fail(key,uncertain,retrySeconds,diagnostic); }
         catch(RuntimeException persistence) {
-            throw new LearningException(503,"AI_GENERATION_UNCERTAIN","생성 호출 기록 확인이 필요합니다.");
+            LOG.warn("Gemini stage=LEDGER_FAILURE_WRITE diagnostic=LEDGER_FAILURE_WRITE_FAILED");
+            throw GeminiDiagnostics.uncertain("LEDGER_FAILURE_WRITE","LEDGER_FAILURE_WRITE_FAILED","생성 호출 기록 확인이 필요합니다. 자동 재호출하지 마세요.");
         }
     }
     private String request(Request request,List<LearningSourceReader.Chunk> chunks,com.teachmi.backend.learning.ConceptSource.Snapshot concept) {
@@ -161,26 +204,38 @@ final class GeminiGenerationService {
                 .writeValueAsString(json.convertValue(value,Object.class));
     }
     private String extract(String body) {
-        var root=json.readTree(body);
-        if(root.path("promptFeedback").hasNonNull("blockReason")) throw new IllegalArgumentException("Blocked");
+        var root=readJson(body,"ENVELOPE_JSON_INVALID");
+        if(root==null || !root.isObject()) throw new GeminiResponseFailure("ENVELOPE_STRUCTURE_INVALID");
+        if(root.path("promptFeedback").hasNonNull("blockReason")) throw new GeminiResponseFailure("PROMPT_BLOCKED");
         var candidates=root.path("candidates");
-        if(!candidates.isArray() || candidates.size()!=1 || !"STOP".equals(candidates.get(0).path("finishReason").asText()))
-            throw new IllegalArgumentException("Incomplete candidate");
+        if(!candidates.isArray() || candidates.size()!=1) throw new GeminiResponseFailure("CANDIDATE_COUNT_INVALID");
+        if("MAX_TOKENS".equals(candidates.get(0).path("finishReason").asText()))
+            throw new GeminiResponseFailure("RESPONSE_MAX_TOKENS");
+        if(!"STOP".equals(candidates.get(0).path("finishReason").asText()))
+            throw new GeminiResponseFailure("RESPONSE_NOT_STOPPED");
         var parts=candidates.get(0).path("content").path("parts");
-        if(!parts.isArray()) throw new IllegalArgumentException("Missing content");
+        if(!parts.isArray()) throw new GeminiResponseFailure("CONTENT_MISSING");
         var text=new StringBuilder();
         for(var part:parts) {
             if(part.path("thought").asBoolean(false)) continue;
-            if(!part.path("text").isString()) throw new IllegalArgumentException("Unexpected output type");
+            if(!part.path("text").isString()) throw new GeminiResponseFailure("CONTENT_TYPE_INVALID");
             text.append(part.path("text").asText());
         }
         return text.toString();
     }
+    private JsonNode readJson(String input,String diagnostic) {
+        try { return json.readTree(input); }
+        catch(RuntimeException invalid) { throw new GeminiResponseFailure(diagnostic); }
+    }
+    private static String diagnostic(RuntimeException failure) {
+        return failure instanceof GeminiResponseFailure invalid?GeminiDiagnostics.safe(invalid.diagnostic):"DOMAIN_RESPONSE_INVALID";
+    }
     private static void validId(String id) {
         if(id==null || id.isBlank() || id.length()>128 || id.indexOf('\0')>=0) throw new IllegalArgumentException();
     }
-    private static LearningException invalidResponse() {
-        return new LearningException(502,"INVALID_GEMINI_RESPONSE","Gemini 응답과 출처를 검증하지 못했습니다.");
+    private static LearningException invalidResponse(String stage,String diagnostic,boolean retryAllowed) {
+        return new LearningException(502,"INVALID_GEMINI_RESPONSE","Gemini 응답과 출처를 검증하지 못했습니다.",null,
+                new GenerationRecovery(stage,diagnostic,retryAllowed,retryAllowed?"retry_same_request":"review_required"));
     }
     private static String hash(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }
