@@ -55,7 +55,7 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 
 `last_error_code`는 고정된 진단 코드만 기록합니다. 키·프롬프트·원문·원본 오류 본문·예외 메시지는 로그에 남기지 않습니다. 검증한 응답과 근거 인용문은 접근이 제한된 내부 DB 기록에 저장합니다. Google generateContent는 이 생성 키의 원격 멱등성을 보장하지 않으므로, 수신 결과를 모를 때는 운영 확인으로 중복 과금 위험을 줄입니다.
 
-B 대화·재설명 첫 질문은 `teachmi-dialogue-v3`·`teachmi-reteach-v3`를 사용합니다. 허가된 원문에서 연속된 6~40자 후보를 결정적으로 만들고 `citationCandidates`와 quote enum으로 제공합니다. 후보는 청크당 최대 8개/전체 최대 64개이며, 원문과 응답을 사후 보정하지 않습니다. 출처 1~2개·ID당 인용 1개·정확한 부분 문자열·6~40자 서버 검증은 유지합니다.
+B 대화·재설명 첫 질문은 `teachmi-dialogue-v3`·`teachmi-reteach-v3`를 사용합니다. 허가된 원문에서 연속된 6~40자 후보를 결정적으로 만들고 `citationCandidates`와 quote enum으로 제공합니다. 후보는 기존 요청 크기 상한 안에서 청크당 최대 8개/전체 최대 64개이며, 원문과 응답을 사후 보정하지 않습니다. 출처 1~2개·ID당 인용 1개·정확한 부분 문자열·6~40자 서버 검증은 유지합니다.
 
 [Google generateContent의 responseJsonSchema 지원 목록](https://ai.google.dev/api/generate-content#v1beta.GenerationConfig)에는 enum이 포함되지만 문자열 maxLength는 포함되지 않습니다. 따라서 maxLength 지시만으로 모델의 길이 준수를 보장하지 않고 짧은 후보 선택과 서버 검증을 함께 사용합니다. 실 모델의 생성 품질 개선은 승인된 별도 시험으로 확인해야 합니다.
 

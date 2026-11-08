@@ -43,4 +43,24 @@ class ShortCitationCandidatesTest {
         assertThat(data.path("citationCandidates").size()).isEqualTo(quotes.size());
         assertThat(v2).contains("teachmi-dialogue-v2").doesNotContain("citationCandidates");
     }
+
+    @Test void candidateOverheadDoesNotRejectAnAlreadyAdmissibleLegacyContext() {
+        var json=JsonMapper.builder().build();
+        var settings=new GeminiSettings("fake-key","test-model",Duration.ofSeconds(3),Duration.ofSeconds(20),10,100,20,2,16000,2048);
+        var generator=new GeminiContentGenerator((GeminiGenerationService)null,settings,json);
+        var chunks=List.of(new LearningSourceReader.Chunk("k01",GeminiFixtures.SOURCE));
+        var original=LegacyDialogueRequestsTest.dialogue();
+        String base=ReflectionTestUtils.invokeMethod(generator,"request",original.learning(),"dialogue",chunks,original,null,true);
+        int size=json.readTree(base).path("contents").get(0).path("parts").get(0).path("text").asText().length();
+        String text=original.text()+"x".repeat(settings.maxSourceChars()+48000-size-2);
+        var large=new com.teachmi.backend.learning.LearningDialogueGenerator.Context(original.learning(),original.turnId(),
+                original.chatStage(),original.kind(),text,original.targetQuestion(),original.messages());
+        String v2=ReflectionTestUtils.invokeMethod(generator,"request",large.learning(),"dialogue",chunks,large,null,true);
+        String v3=ReflectionTestUtils.invokeMethod(generator,"request",large.learning(),"dialogue",chunks,large,null,3);
+        var oldData=json.readTree(json.readTree(v2).path("contents").get(0).path("parts").get(0).path("text").asText());
+        String newData=json.readTree(v3).path("contents").get(0).path("parts").get(0).path("text").asText();
+        assertThat(newData.length()).isLessThanOrEqualTo(settings.maxSourceChars()+48000);
+        assertThat(json.readTree(newData).path("dialogue")).isEqualTo(oldData.path("dialogue"));
+        assertThat(json.readTree(newData).has("citationCandidates")).isFalse();
+    }
 }
