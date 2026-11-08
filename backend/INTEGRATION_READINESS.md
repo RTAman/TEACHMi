@@ -13,7 +13,7 @@
 | 기준 main | 387개 통과 | PR #39 v4 포함, 기존 main CI 성공 |
 | PR #42 최초 검증 | 394개 + HTTP 검증 295개 통과 | 공통 세션 GET의 unresolved 상태 복원 |
 | 현재 수정 후 전체 회귀/계약 | **406개, 43개 클래스 통과** | 실패·오류·건너뜀 0 |
-| 현재 별도 HTTP 여정 | **검증 314개 통과** | 실제 loopback HTTP·격리 PostgreSQL·대체 Gemini |
+| 현재 별도 HTTP 여정 | **최종 검증 315개 통과** | 실제 loopback HTTP·격리 PostgreSQL·대체 Gemini; 이전 실행은 314개, 비동기 조회 횟수 차이 |
 | 현재 HTTP 대체 호출 | 48회 | 실제 B/C 생성기·원장·검증·저장 사용, 외부 Gemini 0회 |
 | Flyway | V1–V12 validate 성공, pending 0 | 새 클러스터·새 테스트 DB |
 | 실제 Gemini | 이전 승인 시험 4회 후 중단 | 이번 수정 검증의 실제 호출은 0회 |
