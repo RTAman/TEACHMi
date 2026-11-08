@@ -25,7 +25,11 @@ class GeminiProblemGenerator implements ProblemGenerator {
     static final String OPERATION = "assessment/problems";
     // 프롬프트·스키마·검증 규칙을 바꾸면 올린다. 같은 버전의 이전 결과가 재사용되지 않게 한다.
     // v3: 출처 표기 규칙을 명시하고 응답 길이를 줄였다. v2에서 인용 검증 실패(502)가 반복됐다.
-    static final String PROMPT_VERSION = "v3";
+    // v4: 프롬프트의 출처 표기 규칙(인용 6~40자, ID당 evidence 1개, 출처 1~2개)을 CitationRules로 실제 검사한다.
+    //     저장된 v3 결과는 새 검사에 걸릴 수 있어 재사용하지 않는다.
+    static final String PROMPT_VERSION = "v4";
+    /** 문제 생성에 쓸 수 있는 출처 ID 개수의 최댓값. 프롬프트의 "1~2개"와 같다. */
+    static final int MAX_SOURCES = 2;
 
     private static final String INSTRUCTION = """
             학생이 AI 학생에게 개념을 설명한 직후 혼자 풀 응용문제 2개를 한국어로 만든다.
@@ -109,11 +113,7 @@ class GeminiProblemGenerator implements ProblemGenerator {
         if (!items.isArray() || items.size() != 2) {
             throw new IllegalArgumentException("문항은 2개여야 합니다.");
         }
-        var sources = new ArrayList<String>();
-        response.path("sourceChunkIds").forEach(id -> sources.add(id.asText()));
-        if (sources.isEmpty()) {
-            throw new IllegalArgumentException("출처가 없습니다.");
-        }
+        var sources = CitationRules.check(response, MAX_SOURCES);
         var drafts = new ArrayList<Draft>();
         var questions = new HashSet<String>();
         for (var item : items) {

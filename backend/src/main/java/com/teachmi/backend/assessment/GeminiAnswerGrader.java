@@ -16,7 +16,11 @@ class GeminiAnswerGrader implements RemoteAnswerGrader {
     static final String OPERATION = "assessment/grade";
     // 판정 규칙·스키마를 바꾸면 올린다.
     // v3: 문제 생성과 같은 출처 표기 규칙을 명시했다.
-    static final String PROMPT_VERSION = "v3";
+    // v4: 프롬프트의 출처 표기 규칙(인용 6~40자, ID당 evidence 1개, 출처 1개)을 CitationRules로 실제 검사한다.
+    //     저장된 v3 결과는 새 검사에 걸릴 수 있어 재사용하지 않는다.
+    static final String PROMPT_VERSION = "v4";
+    /** 채점에 쓸 수 있는 출처 ID 개수. 프롬프트의 "1개만"과 같다. */
+    static final int MAX_SOURCES = 1;
     /** 보완 개념에 정답이 섞여 나오면 대신 쓰는 문장. 재설명과 리포트에 정답이 새지 않게 한다. */
     static final String SAFE_FOCUS = "문제에 적용한 핵심 원리와 그 이유를 다시 설명해 보세요.";
 
@@ -82,6 +86,7 @@ class GeminiAnswerGrader implements RemoteAnswerGrader {
 
     /** 포트의 출처·인용 검사 뒤에 실행된다. DB 쓰기나 AI 호출 없이 판정 의미만 정리한다. */
     AnswerGrader.Grade validate(JsonNode response, String expectedAnswer) {
+        CitationRules.check(response, MAX_SOURCES);
         var judgement = response.path("judgement").asText("");
         if (!List.of("correct", "wrong", "pending_review").contains(judgement)) {
             throw new IllegalArgumentException("알 수 없는 판정입니다.");
