@@ -151,7 +151,7 @@ final class GeminiGenerationService {
             boolean exhausted;
             try { exhausted=ledger.failedAtLimit(key); }
             catch(RuntimeException unavailable) {
-                throw GeminiDiagnostics.uncertain("LEDGER_FAILURE_STATUS_READ","LEDGER_FAILURE_STATUS_READ_FAILED",
+                throw GeminiDiagnostics.uncertain("LEDGER_FAILURE_WRITE","LEDGER_FAILURE_STATUS_READ_FAILED",
                         "생성 시도 상태 확인이 필요합니다. 자동 재호출하지 마세요.");
             }
             throw invalidResponse("RESPONSE_VALIDATION",diagnostic,!exhausted,exhausted);
