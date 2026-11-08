@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import tools.jackson.databind.JsonNode;
+import com.teachmi.backend.ai.GeminiValidationException;
+import static com.teachmi.backend.ai.GeminiValidationException.Diagnostic.*;
 
 /**
  * C의 프롬프트가 약속한 출처 표기 규칙을 실제로 검사한다.
@@ -21,35 +23,36 @@ final class CitationRules {
     static List<String> check(JsonNode response, int maxSources) {
         var ids = response.path("sourceChunkIds");
         if (!ids.isArray() || ids.isEmpty()) {
-            throw new IllegalArgumentException("출처가 없습니다.");
+            throw new GeminiValidationException(CITATION_IDS_MISSING,"출처가 없습니다.");
         }
         if (ids.size() > maxSources) {
-            throw new IllegalArgumentException("출처는 " + maxSources + "개까지만 쓸 수 있습니다.");
+            throw new GeminiValidationException(CITATION_CARDINALITY_INVALID,"출처는 " + maxSources + "개까지만 쓸 수 있습니다.");
         }
         var sources = new ArrayList<String>();
         for (var id : ids) {
             var value = id.asText("");
             if (value.isEmpty() || sources.contains(value)) {
-                throw new IllegalArgumentException("출처 ID가 비어 있거나 중복됩니다.");
+                throw new GeminiValidationException(value.isEmpty()?CITATION_ID_INVALID:CITATION_ID_DUPLICATE,"출처 ID가 비어 있거나 중복됩니다.");
             }
             sources.add(value);
         }
 
         var evidence = response.path("evidence");
         if (!evidence.isArray() || evidence.size() != sources.size()) {
-            throw new IllegalArgumentException("출처 ID마다 evidence가 정확히 1개씩 있어야 합니다.");
+            throw new GeminiValidationException(CITATION_CARDINALITY_INVALID,"출처 ID마다 evidence가 정확히 1개씩 있어야 합니다.");
         }
         var grounded = new HashSet<String>();
         for (var entry : evidence) {
             var id = entry.path("sourceChunkId").asText("");
             if (!sources.contains(id) || !grounded.add(id)) {
                 // 같은 ID에 evidence가 두 개면 다른 ID의 evidence가 빠진 것이다.
-                throw new IllegalArgumentException("출처 ID마다 evidence가 정확히 1개씩 있어야 합니다.");
+                throw new GeminiValidationException(CITATION_CARDINALITY_INVALID,"출처 ID마다 evidence가 정확히 1개씩 있어야 합니다.");
             }
             // 포트와 같은 기준(String.length)으로 센다. 한글·숫자·기호는 모두 한 글자다.
             int length = entry.path("quote").asText("").length();
             if (length < MIN_QUOTE_LENGTH || length > MAX_QUOTE_LENGTH) {
-                throw new IllegalArgumentException("인용은 " + MIN_QUOTE_LENGTH + "~" + MAX_QUOTE_LENGTH + "자여야 합니다.");
+                throw new GeminiValidationException(length<MIN_QUOTE_LENGTH?EVIDENCE_QUOTE_TOO_SHORT:EVIDENCE_QUOTE_TOO_LONG,
+                        "인용은 " + MIN_QUOTE_LENGTH + "~" + MAX_QUOTE_LENGTH + "자여야 합니다.");
             }
         }
         return List.copyOf(sources);

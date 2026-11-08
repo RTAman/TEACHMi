@@ -346,6 +346,8 @@ class OfflineHttpJourneyTest {
             gateway.fault.set("long-quote");
             var cBad=exchange(member,"POST",path(learning)+"/problems",null,null,true);
             check("C v4 overlong quote rejected",cBad.status()==502 && cBad.body().path("code").asText().equals("INVALID_GEMINI_RESPONSE"));
+            check("C exact validation diagnostic reaches HTTP",cBad.body().path("recovery").path("diagnosticCode").asText().equals("EVIDENCE_QUOTE_TOO_LONG")
+                    && cBad.body().path("recovery").path("retryAllowed").asBoolean());
             observe("C-intentional-41-character-quote",cBad);
             observations.add(Map.of("kind","C-validation-ledger-diagnostic","rows",ledger()));
             var problems=call(member,"POST",path(learning)+"/problems",null,null,200);
@@ -389,12 +391,34 @@ class OfflineHttpJourneyTest {
             check("economics report restored",economicsReport.equals(get(member,path(review)+"/report")));
             for(String route:List.of("/api/v1/materials/"+accounting.id(),path(learning),path(learning)+"/evidence",
                     path(learning)+"/problems/"+p1,path(learning)+"/report")) call(other,"GET",route,null,null,404);
+            var limitedMember=new Member();login(limitedMember,true);
+            String limitedSession=session(limitedMember,material(limitedMember,text("sample-accounting.txt"),"시도 한도 검증"));
+            mode(limitedMember,limitedSession,"review");
+            var limitedBody=Map.of("kind","example","expectedVersion",state(limitedMember,limitedSession).path("version").asLong());
+            String limitedKey=UUID.randomUUID().toString();
+            gateway.fault.set("long-quote");
+            var firstLimit=exchange(limitedMember,"POST",path(limitedSession)+"/turns",limitedBody,limitedKey,true);
+            check("first quote failure allows explicit retry",firstLimit.status()==502 && firstLimit.body().path("recovery").path("retryAllowed").asBoolean());
+            gateway.fault.set("long-quote");
+            var exhausted=exchange(limitedMember,"POST",path(limitedSession)+"/turns",limitedBody,limitedKey,true);
+            check("second quote failure immediately reports exhaustion",exhausted.status()==502
+                    && exhausted.body().path("recovery").path("action").asText().equals("limit_reached")
+                    && !exhausted.body().path("recovery").path("retryAllowed").asBoolean());
+            var limitedState=state(limitedMember,limitedSession);before=gateway.count();var limitedLedger=ledger();
+            check("retry after exhaustion is blocked before provider",exchange(limitedMember,"POST",path(limitedSession)+"/turns",limitedBody,limitedKey,true).status()==429
+                    && gateway.count()==before);
+            stop();start(true,false);
+            check("exhaustion survives restart without changing ledger",limitedState.equals(state(limitedMember,limitedSession))
+                    && limitedState.path("recovery").path("action").asText().equals("limit_reached")
+                    && limitedLedger.equals(ledger()) && gateway.count()==before);
             var cFault=new Member();login(cFault,true);
             var cMaterial=material(cFault,text("sample-economics.txt"),"C 오류 검증");
             String cs=session(cFault,cMaterial);mode(cFault,cs,"review");finishChat(cFault,cs);
             gateway.fault.set("timeout");
             var cTimeout=exchange(cFault,"POST",path(cs)+"/problems",null,null,true);
             check("C uncertain stops this flow",cTimeout.status()==503 && cTimeout.body().path("code").asText().equals("AI_GENERATION_UNCERTAIN"));
+            check("C initial uncertain includes recovery",cTimeout.body().path("recovery").path("action").asText().equals("review_required")
+                    && !cTimeout.body().path("recovery").path("retryAllowed").asBoolean());
             observe("C-intentional-timeout",cTimeout); // No further generation requests for this member/session.
             var cHeld=state(cFault,cs);
             observations.add(Map.of("kind","C-uncertain-session-restore","hasRecovery",cHeld.has("recovery"),

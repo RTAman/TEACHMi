@@ -24,6 +24,11 @@ public class LearningException extends RuntimeException {
 
     LearningException withSession(SessionView session) { return new LearningException(status,code,getMessage(),session,recovery); }
 
+    /** Keep the original 502 diagnostic, but persist the exhausted request's terminal hold for reconnect. */
+    String storedErrorCode() {
+        return recovery!=null && "limit_reached".equals(recovery.action())?"AI_ATTEMPT_LIMIT":code;
+    }
+
     static LearningException retryBlocked(String code,SessionView session) {
         boolean uncertain="AI_GENERATION_UNCERTAIN".equals(code);
         return new LearningException(uncertain?503:429,code,

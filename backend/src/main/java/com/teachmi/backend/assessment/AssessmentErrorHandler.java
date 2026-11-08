@@ -2,6 +2,7 @@ package com.teachmi.backend.assessment;
 
 import com.teachmi.backend.auth.ApiException;
 import com.teachmi.backend.learning.LearningException;
+import com.teachmi.backend.learning.GenerationRecovery;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -27,7 +28,11 @@ class AssessmentErrorHandler {
     ResponseEntity<ErrorBody> unreadable(HttpMessageNotReadableException ex) {
         return ResponseEntity.badRequest().body(new ErrorBody("MALFORMED_JSON", "JSON 요청 형식을 확인하세요."));
     }
-    record ErrorBody(String code, String message) {}
+    record ErrorBody(String code, String message,
+                     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                     GenerationRecovery recovery) {
+        ErrorBody(String code,String message) {this(code,message,null);}
+    }
 
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ErrorBody> api(ApiException ex) {
@@ -36,6 +41,6 @@ class AssessmentErrorHandler {
 
     @ExceptionHandler(LearningException.class)
     ResponseEntity<ErrorBody> learning(LearningException ex) {
-        return ResponseEntity.status(ex.status()).body(new ErrorBody(ex.code(), ex.getMessage()));
+        return ResponseEntity.status(ex.status()).body(new ErrorBody(ex.code(), ex.getMessage(),ex.recovery()));
     }
 }

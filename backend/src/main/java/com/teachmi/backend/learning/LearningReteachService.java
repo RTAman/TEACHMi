@@ -23,7 +23,7 @@ public class LearningReteachService {
             if (generator == null) throw new LearningException(503, "RETEACH_GENERATOR_UNAVAILABLE", "재설명 생성 연결이 필요합니다.");
             return transactions.complete(claim, java.util.Objects.requireNonNull(generator.opening(claim.context())));
         } catch (LearningException ex) {
-            var current = transactions.fail(claim, ex.code());
+            var current = transactions.fail(claim, ex.storedErrorCode());
             throw ex.withSession(current);
         } catch (RuntimeException ex) {
             var current = transactions.fail(claim, "RETEACH_GENERATION_FAILED");

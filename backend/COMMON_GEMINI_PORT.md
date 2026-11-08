@@ -1,14 +1,14 @@
 # B 공통 Gemini 호출 포트
 
 공개 Java 계약은 `com.teachmi.backend.ai.GeminiGenerationPort`입니다.
-새 HTTP API나 C의 ProblemGenerator·AnswerGrader 구현은 추가하지 않습니다.
+공개 HTTP API를 추가하지 않으며 B와 C의 생성·채점 어댑터가 이 포트를 공유합니다.
 GEMINI_ENABLED=true일 때 bean이 생깁니다. 꺼져 있으면 소비자는 ObjectProvider로 미연결 상태를 처리하세요.
 기존 환경 변수, 모델 선택, 고정 Google HTTPS 주소와 키 헤더, 타임아웃 설정은 그대로 사용합니다.
 
 ## 최신 main과 공통 서비스 호환성
 
-기준 main: e159d111177071cd5f32b78ee83a7fc2550b7ff6 (C PR #27/#29/#31/#33 병합).
-수정 전 전체 A·B·C 테스트 267개가 통과했습니다. 다음 네 파일은 검토만 했으며 이번 PR에서 변경하지 않습니다.
+기준 main: d1b5455f47233a0e03fbe34ee55252a9cd125f1f (PR #38·#39 v4·#40·#41 병합).
+수정 후 전체 A·B·C 404개 및 별도 HTTP 여정이 통과했습니다. 아래의 잠금·트랜잭션 계약은 유지하며, 세션 GET에는 읽기 전용 생성 보류 복원을 추가했습니다.
 
 | 서비스 | 현재 계약과 AI 연결 위치 |
 | --- | --- |
@@ -18,7 +18,7 @@ GEMINI_ENABLED=true일 때 bean이 생깁니다. 꺼져 있으면 소비자는 O
 | LearningCommands | C 작업 지문과 응답 저장은 B와 같은 요청 키 공간의 원자적 DB 콜백입니다. Gemini 생성 이력과는 별도입니다. 콜백에서 새 AI 포트를 호출하면 409 AI_TRANSACTION_NOT_ALLOWED로 롤백하고 호출하지 않습니다. |
 
 기존 B 요약·질문·대화·재설명은 같은 공통 실행 엔진을 사용합니다.
-기존 B의 프롬프트 JSON, DTO, 생성 키 버전과 계산식을 보존해 V4에 저장한 결과를 다시 사용합니다.
+기존 B의 DTO·생성 키 계산식과 v1·v2 요청 JSON을 보존해 저장한 성공 결과를 다시 사용합니다. 새 대화·재설명 요청은 짧은 인용 후보를 제공하는 v3이며, 과거 성공 캐시는 별도 예약 없이 조회/재검증합니다.
 기존 B 준비 API의 트랜잭션 경계도 유지합니다. 새 공개 포트의 트랜잭션 거절 규칙을 기존 B 준비 경로에 소급하지 않습니다.
 
 ## 입력과 결과
@@ -77,13 +77,13 @@ B와 새 소비자는 같은 GeminiLedger와 전용 최대 2개 연결 풀을 �
 추가 오류는 422 INVALID_AI_REQUEST, 409 AI_TRANSACTION_NOT_ALLOWED,
 503 AI_SESSION_INTEGRATION_PENDING입니다. 기존 한도·원문·Gemini 오류 코드는 GEMINI_CONTENT.md를 따릅니다.
 
-## C 담당자의 후속 연결
+## C 연결과 안전한 오류 계약
 
-이번 작업은 C 패키지와 ProblemGenerator·AnswerGrader를 수정하지 않습니다.
-현재 AnswerGrader는 C 저장 트랜잭션 안의 로컬 연산입니다. 그 안에 새 포트를 바로 호출하면 409입니다.
-C의 실제 AI 채점 연결은 입력/작업 임대 저장·커밋 → 트랜잭션 밖 생성 → 최신 버전/실행 토큰 검증·결과 저장으로 분리해야 합니다.
-C는 문제별 출처 연결, 판정 정책·정답 비공개, attempt 보존, stale 결과 거절을 자신의 어댑터와 서비스에서 구현해야 합니다.
-공통 호출 포트를 만들었다는 이유로 실제 C 문제 생성·AI 채점이 완성된 것으로 처리하지 않습니다.
+C의 GeminiProblemGenerator·GeminiAnswerGrader는 v4로 연결돼 있습니다. 원격 채점은 입력/작업 임대 저장·커밋 → 트랜잭션 밖 생성 → 최신 버전/실행 토큰 검증·결과 저장으로 분리합니다. 문제별 출처, 정답 비공개, attempt 보존과 stale 결과 거절 계약은 유지합니다.
+
+업무 검증기는 GeminiValidationException과 고정 Diagnostic enum으로 안전한 분류만 전달할 수 있습니다. C CitationRules의 규칙과 v4 프롬프트는 바꾸지 않고 길이/출처 분류를 원장과 recovery에 전달합니다. 임의 예외 메시지는 원문이나 응답 전문과 함께 외부로 내보내지 않으며, 미분류 예외는 DOMAIN_RESPONSE_INVALID로 처리합니다.
+
+C HTTP 오류도 LearningException의 선택적 recovery를 전달합니다. 마지막 허용 시도의 검증 실패는 기존 502·INVALID_GEMINI_RESPONSE와 구체 진단을 유지하면서 retryAllowed=false/action=limit_reached를 반환합니다. 일반 인증·자료 오류의 code/message 형태는 유지합니다.
 
 ## 검증과 테스트 대체
 

@@ -31,7 +31,9 @@ class CitationRulesTest {
     @ValueSource(ints = {5, 41})
     void quotesOfFiveAndFortyOneCharactersAreRejected(int length) {
         assertThatThrownBy(() -> CitationRules.check(quoted("가".repeat(length)), 2))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("6~40자");
+                .isInstanceOf(com.teachmi.backend.ai.GeminiValidationException.class).hasMessageContaining("6~40자")
+                .satisfies(error -> assertThat(((com.teachmi.backend.ai.GeminiValidationException)error).diagnostic().name())
+                        .isEqualTo(length<6?"EVIDENCE_QUOTE_TOO_SHORT":"EVIDENCE_QUOTE_TOO_LONG"));
     }
 
     @Test

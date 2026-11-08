@@ -28,7 +28,7 @@ final class GeminiGenerationService {
     private final GeminiLedger ledger;
     private final ObjectMapper json;
     private final ObjectProvider<LearningSessionService> sessions;
-    private record Previous<T>(String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {}
+    record Previous<T>(String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {}
     GeminiGenerationService(GeminiSettings settings,ObjectProvider<LearningSourceReader> sources,
                             GeminiTransport transport,GeminiLedger ledger,ObjectMapper json) {
         this(settings,sources,transport,ledger,json,null);
@@ -89,14 +89,20 @@ final class GeminiGenerationService {
     <T> T legacyWithPreviousSuccess(LearningContentGenerator.Context context,String version,
             Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,String previousVersion,
             Function<List<LearningSourceReader.Chunk>,String> previousComposer,Validator<T> previousValidator) {
+        return legacyWithPreviousSuccesses(context,version,composer,validator,
+                List.of(new Previous<>(previousVersion,previousComposer,previousValidator)));
+    }
+
+    <T> T legacyWithPreviousSuccesses(LearningContentGenerator.Context context,String version,
+            Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,List<Previous<T>> previous) {
         return execute(new Scope(context.memberId(),context.sessionId(),context.materialId(),context.conceptId(),
-                context.concept().sourceChunkIds()),version,composer,validator,new Previous<>(previousVersion,previousComposer,previousValidator));
+                context.concept().sourceChunkIds()),version,composer,validator,previous);
     }
 
     private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {
-        return execute(scope,version,composer,validator,null);
+        return execute(scope,version,composer,validator,List.of());
     }
-    private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,Previous<T> previous) {
+    private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,List<Previous<T>> previous) {
         var reader=sources.getIfAvailable();
         if(reader==null) throw new LearningException(503,"LEARNING_SOURCE_INTEGRATION_PENDING","A의 자료 소유권 검증·원문 조회 연결이 필요합니다.");
         if(settings.apiKey().isBlank() || !settings.model().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,99}")) {
@@ -106,13 +112,15 @@ final class GeminiGenerationService {
                 scope.sourceChunkIds()),settings.maxSourceChars());
         var request=composer.apply(chunks);
         var key=hash(version+"\n"+settings.model()+"\n"+request);
-        if(previous!=null) {
+        if(!previous.isEmpty()) {
             String saved=ledger.succeeded(key,scope.memberId(),scope.sessionId());
             if(saved!=null) return cached(saved,chunks,validator);
-            String oldRequest=previous.composer().apply(chunks);
-            String oldKey=hash(previous.version()+"\n"+settings.model()+"\n"+oldRequest);
-            String historical=ledger.succeeded(oldKey,scope.memberId(),scope.sessionId());
-            if(historical!=null) return cached(historical,chunks,previous.validator());
+            for(var historicalVersion:previous) {
+                String oldRequest=historicalVersion.composer().apply(chunks);
+                String oldKey=hash(historicalVersion.version()+"\n"+settings.model()+"\n"+oldRequest);
+                String historical=ledger.succeeded(oldKey,scope.memberId(),scope.sessionId());
+                if(historical!=null) return cached(historical,chunks,historicalVersion.validator());
+            }
         }
         String cached;
         try { cached=ledger.claim(key,scope.memberId(),scope.sessionId(),request.getBytes(StandardCharsets.UTF_8).length); }
@@ -140,7 +148,13 @@ final class GeminiGenerationService {
             var diagnostic=diagnostic(invalid);
             LOG.warn("Gemini stage=RESPONSE_VALIDATION diagnostic={}",diagnostic);
             fail(key,false,0,diagnostic);
-            throw invalidResponse("RESPONSE_VALIDATION",diagnostic,true);
+            boolean exhausted;
+            try { exhausted=ledger.failedAtLimit(key); }
+            catch(RuntimeException unavailable) {
+                throw GeminiDiagnostics.uncertain("LEDGER_FAILURE_STATUS_READ","LEDGER_FAILURE_STATUS_READ_FAILED",
+                        "생성 시도 상태 확인이 필요합니다. 자동 재호출하지 마세요.");
+            }
+            throw invalidResponse("RESPONSE_VALIDATION",diagnostic,!exhausted,exhausted);
         }
         try { ledger.succeed(key,payload); }
         catch(RuntimeException persistence) {
@@ -228,14 +242,18 @@ final class GeminiGenerationService {
         catch(RuntimeException invalid) { throw new GeminiResponseFailure(diagnostic); }
     }
     private static String diagnostic(RuntimeException failure) {
+        if(failure instanceof com.teachmi.backend.ai.GeminiValidationException invalid) return invalid.diagnostic().name();
         return failure instanceof GeminiResponseFailure invalid?GeminiDiagnostics.safe(invalid.diagnostic):"DOMAIN_RESPONSE_INVALID";
     }
     private static void validId(String id) {
         if(id==null || id.isBlank() || id.length()>128 || id.indexOf('\0')>=0) throw new IllegalArgumentException();
     }
     private static LearningException invalidResponse(String stage,String diagnostic,boolean retryAllowed) {
+        return invalidResponse(stage,diagnostic,retryAllowed,false);
+    }
+    private static LearningException invalidResponse(String stage,String diagnostic,boolean retryAllowed,boolean exhausted) {
         return new LearningException(502,"INVALID_GEMINI_RESPONSE","Gemini 응답과 출처를 검증하지 못했습니다.",null,
-                new GenerationRecovery(stage,diagnostic,retryAllowed,retryAllowed?"retry_same_request":"review_required"));
+                new GenerationRecovery(stage,diagnostic,retryAllowed,exhausted?"limit_reached":retryAllowed?"retry_same_request":"review_required"));
     }
     private static String hash(String value) {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8))); }

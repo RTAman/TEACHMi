@@ -121,6 +121,12 @@ public class GeminiLedger implements AutoCloseable {
         return values.isEmpty()?null:values.getFirst();
     }
 
+    /** Only the exact failed request may exhaust its attempts; no session-wide inference from old hashes. */
+    boolean failedAtLimit(String key) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM teachmi.learning_ai_generation "
+                +"WHERE generation_key=? AND state='failed' AND attempts>=?)",Boolean.class,key,settings.maxAttempts()));
+    }
+
     public void fail(String key, boolean uncertain, int retrySeconds, String reason) {
         transaction.executeWithoutResult(status -> jdbc.update(
                 "UPDATE teachmi.learning_ai_generation SET state=?,retry_after=now()+make_interval(secs=>?),"

@@ -81,6 +81,8 @@ B의 AI 오류와 세션 GET에는 선택적 `recovery`가 추가됩니다. 기�
 
 ### 로딩과 확인 대기 구분
 
+같은 생성 요청의 마지막 허용 시도가 502 검증 실패로 끝나면 그 응답에서 바로 `recovery.action=limit_reached`, `retryAllowed=false`를 반환합니다. 바깥의 `INVALID_GEMINI_RESPONSE`와 구체 인용 진단은 유지하고, 대화/재설명 보류에는 `AI_ATTEMPT_LIMIT`를 저장합니다. 재접속 GET도 wait/limit_reached로 복원하며, UI는 다음 POST를 보내 한도를 확인할 필요가 없습니다.
+
 `availableActions=["wait"]`만 보고 스피너를 켜거나 폴링하지 마세요. 호환성을 위해 유지한 동작 이름이며 **자동으로 완료되지 않는 보류**에도 사용됩니다. 실패한 대화는 pendingTurn.errorCode, 재설명 시작은 activeReteach.errorCode를 함께 봅니다. 오류 응답의 code와 recovery, 재접속 GET의 recovery가 우선입니다.
 
 | 조건 | 화면과 안내 | 폴링·재호출 |

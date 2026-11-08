@@ -4,19 +4,16 @@ POST /api/v1/sessions/{sessionId}/problems는 학습당 두 문항을 한 번 �
 GET /api/v1/sessions/{sessionId}/problems/{problemId}로 같은 문항을 복원합니다.
 로그인 쿠키가 필요하고 POST는 X-CSRF-Token도 필요합니다. 정답·해설·채점 기준은 응답에 없습니다.
 
-## 실제 생성기 연결 대기
+## 실제 Gemini 생성과 비활성 상태
 
-일반 설정에서는 실제 원문 기반 생성기가 아직 없으므로 새 문제 생성에
-503 ASSESSMENT_GENERATION_PENDING을 반환하고 DB에 문항을 만들지 않습니다.
-Gemini가 구현된 것처럼 임시 문항을 반환하지 않습니다.
+GEMINI_ENABLED=true와 유효한 키·모델이 설정되면 GeminiProblemGenerator의 v4 프롬프트로 실제 원문 기반 문제 2개를 생성합니다. A의 소유권/선택 개념과 B의 학습 근거를 확인하고 공통 포트·CitationRules를 통과한 결과만 저장합니다. 비활성 상태에서 데모도 꺼져 있으면 503 ASSESSMENT_GENERATION_PENDING을 반환합니다.
 
 명시적으로 ASSESSMENT_DEMO_ENABLED=true를 설정하면 개발·시연용 고정 감가상각 문항을 사용합니다.
 이는 강의자료나 개념을 반영하지 않는 데모입니다. 데모 문항의 source_chunk_ids는 빈 목록이며
 임의의 강의자료 출처를 붙이지 않습니다. 실제 생성기와 채점기를 연결하기 전 일반 운영에서 켜지 마세요.
 이미 저장한 문항은 설정을 꺼도 소유자에게 조회·재호출로 같은 문항을 반환합니다.
 
-실제 생성기 후속 구현에서는 A의 소유권 검증된 원문과 B의 학습 근거를 읽고,
-생성 내용·출처 ID·인용 근거를 검증한 뒤 문항별 출처를 저장하도록 생성 계약을 확장해야 합니다.
+타임아웃·미확인 호출은 공통 원장을 보존하고 재생성을 차단합니다. 오류 응답의 recovery와 [공통 Gemini 정책](GEMINI_CONTENT.md)을 따릅니다.
 
 ## 저장 일관성
 
@@ -59,17 +56,12 @@ pending_review는 오답으로 집계하지 않으며 next_problem 또는 finish
 이미 읽은 B 엔티티도 잠금 후 refresh하여 오래된 상태로 판정하지 않습니다.
 답안 저장·판정 저장·정답 문항 확정은 하나의 DB 트랜잭션입니다.
 동시 같은 키는 한 결과로 수렴하고 다른 키의 중복 첫 시도는 거절합니다.
-채점 실패·잘못된 판정은 502로 전체 롤백하므로 같은 키·본문으로 재시도할 수 있습니다.
+원격 채점 실패 시 입력 답안은 미판정으로 보존됩니다. 같은 키·본문으로 재접근하며 recovery가 허용하는 경우에만 명시적으로 재시도합니다.
 
-일반 설정에 실제 채점기는 아직 없으며 503 ASSESSMENT_GRADING_PENDING을 반환합니다.
-ASSESSMENT_DEMO_ENABLED=true에서만 FixedAnswerGrader가 금액(원·만원)을 비교합니다.
-이는 풀이의 이유·논리·원문 근거를 평가하지 않는 임시 채점입니다.
-현재 채점 포트는 DB 잠금 안에서 실행하는 로컬 연산 전용입니다.
-후속 Gemini 채점은 외부 호출을 이 트랜잭션에 넣지 말고, 입력 저장·실행 임대·잠금 밖 호출·버전 재검증 저장과
-타임아웃·사용량·재시도 정책을 별도로 구현해야 합니다.
+Gemini 활성 시 RemoteAnswerGrader의 v4 프롬프트로 답과 풀이를 실제 채점합니다. 입력 저장/커밋 → DB 잠금 밖 AI 호출 → 최신 상태 검증/판정 저장으로 분리합니다. correct/wrong/pending_review 판정과 v4 출처 규칙을 유지합니다. 비활성 상태에서 데모도 꺼져 있으면 ASSESSMENT_GRADING_PENDING입니다. 명시적 데모의 FixedAnswerGrader는 의미 기반 채점이 아닙니다.
 
 미로그인 401, CSRF 누락·오류 403, 타인/없는/잘못된 ID 404,
-입력·요청 키 오류 422, JSON 파싱 오류 400입니다. 오류 본문은 code·message이며 비공개 답안을 담지 않습니다.
+입력·요청 키 오류 422, JSON 파싱 오류 400입니다. 오류 본문은 기존 code·message와 선택적 recovery이며 비공개 답안을 담지 않습니다. 생성 관련 LearningException의 stage·diagnosticCode·retryAllowed·action을 그대로 전달합니다. CitationRules 길이 위반은 EVIDENCE_QUOTE_TOO_SHORT/TOO_LONG, 출처 개수/중복 근거는 CITATION_CARDINALITY_INVALID 등 안전한 코드로 구분합니다. review_required/limit_reached에서는 로딩과 자동 재전송을 종료하세요.
 정상 결과는 기존 V9 테이블에 저장합니다. 마이그레이션 추가·기존 SQL 변경은 없습니다.
 
 ## 재설명·해설 연결

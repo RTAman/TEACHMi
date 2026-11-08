@@ -243,6 +243,17 @@ class GeminiCommonPortIntegrationTest {
         assertThat(generate(request)).isEqualTo("원가 배분");
         assertThat(calls()).isEqualTo(2);
     }
+    @Test void typedDomainDiagnosticsReachRecoveryAndTheLedgerWithoutPrivateMessages() {
+        var exception=catchThrowableOfType(() -> port.generate(request("assessment/problems"),node -> {
+            throw new com.teachmi.backend.ai.GeminiValidationException(
+                    com.teachmi.backend.ai.GeminiValidationException.Diagnostic.EVIDENCE_QUOTE_TOO_LONG,"private domain details");
+        }),LearningException.class);
+        assertThat(exception.code()).isEqualTo("INVALID_GEMINI_RESPONSE");
+        assertThat(exception.recovery().diagnosticCode()).isEqualTo("EVIDENCE_QUOTE_TOO_LONG");
+        assertThat(exception.getMessage()).doesNotContain("private domain details");
+        assertThat(jdbc.queryForObject("SELECT last_error_code FROM teachmi.learning_ai_generation",String.class)).isEqualTo("EVIDENCE_QUOTE_TOO_LONG");
+    }
+
     @Test void timeoutsAreUncertainAndNeverAutomaticallySentAgain() {
         doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0)).when(transport).generate(anyString());
         var request=request("assessment/problems");

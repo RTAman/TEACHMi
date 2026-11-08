@@ -34,6 +34,8 @@ final class OfflineHttpTransport implements GeminiTransport {
         var output=new LinkedHashMap<String,Object>();
         output.put("sourceChunkIds",List.of(id));
         String quote=source.substring(0,"long-quote".equals(injection)?41:20);
+        if(injection==null && !data.path("citationCandidates").isEmpty())
+            quote=data.path("citationCandidates").get(0).path("quote").asText();
         if("bad-quote".equals(injection)) quote="실제 원문과 일치하지 않는 인용문입니다.";
         output.put("evidence",List.of(Map.of("sourceChunkId",id,"quote",quote)));
         switch(operation) {

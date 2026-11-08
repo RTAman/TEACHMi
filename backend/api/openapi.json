@@ -319,7 +319,7 @@
       "post": {
         "operationId": "sendLearningTurn",
         "summary": "답변·힌트·쉬운 예시·모르겠어요",
-        "description": "입력을 먼저 저장. 충분한 answer만 case→concept→reason→wrapup→problem. 도움은 단계 유지. 실패 후 pendingTurn의 원래 키/expectedVersion/text로 재전송; GET version으로 본문을 바꾸지 마세요. AI_GENERATION_UNCERTAIN이면 입력을 보존하고 availableActions=wait로 복원합니다. recovery.retryAllowed=false일 때 키/본문/모델/출력 설정을 바꿔 재호출하지 말고 호출 결과를 확인하세요.",
+        "description": "입력을 먼저 저장. 충분한 answer만 case→concept→reason→wrapup→problem. 도움은 단계 유지. 실패 후 pendingTurn의 원래 키/expectedVersion/text로 재전송; GET version으로 본문을 바꾸지 마세요. AI_GENERATION_UNCERTAIN이면 입력을 보존하고 availableActions=wait로 복원합니다. recovery.retryAllowed=false일 때 키/본문/모델/출력 설정을 바꿔 재호출하지 말고 호출 결과를 확인하세요. 마지막 허용 시도의 검증 실패는 기존 502와 진단을 유지하면서 바로 action=limit_reached, retryAllowed=false를 반환합니다. 대화/재설명에는 AI_ATTEMPT_LIMIT 보류를 저장하므로 추가 POST 없이 GET에서도 복원합니다.",
         "parameters": [
           {
             "$ref": "#/components/parameters/IdempotencyKey"

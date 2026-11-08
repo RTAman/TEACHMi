@@ -2,7 +2,7 @@
 
 Java 21, Spring Boot 4.1.2, Spring Data JPA, PostgreSQL 17을 사용합니다. 로컬에서는 각자 PostgreSQL을 띄우고, 세 사람의 코드는 하나의 Spring Boot 서버에서 실행됩니다.
 
-B가 제공하는 [공통 Gemini 호출 포트](COMMON_GEMINI_PORT.md)에 원문 검증·공유 한도·중복 방지와 C 후속 연결의 트랜잭션 규칙을 정리했습니다.
+B가 제공하는 [공통 Gemini 호출 포트](COMMON_GEMINI_PORT.md)에 원문 검증·공유 한도·중복 방지와 C 문제 생성·채점의 트랜잭션 규칙을 정리했습니다. [통합 검증과 배포 준비 기록](INTEGRATION_READINESS.md)에서 검증 범위와 남은 실연동 시험을 확인하세요.
 
 ## 처음 실행하기
 
