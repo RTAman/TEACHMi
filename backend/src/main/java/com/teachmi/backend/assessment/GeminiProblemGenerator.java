@@ -24,7 +24,8 @@ import tools.jackson.databind.ObjectMapper;
 class GeminiProblemGenerator implements ProblemGenerator {
     static final String OPERATION = "assessment/problems";
     // 프롬프트·스키마·검증 규칙을 바꾸면 올린다. 같은 버전의 이전 결과가 재사용되지 않게 한다.
-    static final String PROMPT_VERSION = "v2";
+    // v3: 출처 표기 규칙을 명시하고 응답 길이를 줄였다. v2에서 인용 검증 실패(502)가 반복됐다.
+    static final String PROMPT_VERSION = "v3";
 
     private static final String INSTRUCTION = """
             학생이 AI 학생에게 개념을 설명한 직후 혼자 풀 응용문제 2개를 한국어로 만든다.
@@ -37,6 +38,12 @@ class GeminiProblemGenerator implements ProblemGenerator {
             - solution은 정답에 이르는 풀이와 근거다.
             - gradingCriteria에는 정답으로 볼 조건과, 답과 함께 설명해야 할 이유를 쓴다.
             - 원문만으로 두 문제를 만들 근거가 부족하면 내용을 반환하지 않는다.
+            - 각 항목은 짧게 쓴다. solution은 계산식과 이유 두세 문장, gradingCriteria는 한두 문장이면 충분하다.
+            출처 표기 규칙. 하나라도 어기면 서버가 응답 전체를 거절한다.
+            - sourceChunkIds에는 실제로 근거로 쓴 원문 조각 ID를 1~2개만 넣는다. 같은 ID를 두 번 넣지 않는다.
+            - sourceChunkIds의 ID마다 evidence를 정확히 1개씩 만든다. evidence 없는 ID를 남기지 않는다.
+            - evidence.quote는 그 원문 조각에서 6~40글자를 한 글자도 바꾸지 않고 그대로 복사한다.
+              띄어쓰기, 기호(÷, -, 괄호), 숫자 표기를 원문과 똑같이 쓰고, 요약하거나 문장을 이어 붙이지 않는다.
             """;
 
     private final GeminiGenerationPort port;
@@ -143,10 +150,10 @@ class GeminiProblemGenerator implements ProblemGenerator {
                "items":{"type":"object","additionalProperties":false,
                  "required":["question","changedConditions","expectedAnswer","solution","gradingCriteria"],
                  "properties":{
-                   "question":{"type":"string","minLength":10,"maxLength":600},
-                   "changedConditions":{"type":"string","minLength":1,"maxLength":300},
-                   "expectedAnswer":{"type":"string","minLength":1,"maxLength":200},
-                   "solution":{"type":"string","minLength":1,"maxLength":1500},
-                   "gradingCriteria":{"type":"string","minLength":1,"maxLength":800}}}}}}
+                   "question":{"type":"string","minLength":10,"maxLength":400},
+                   "changedConditions":{"type":"string","minLength":1,"maxLength":150},
+                   "expectedAnswer":{"type":"string","minLength":1,"maxLength":100},
+                   "solution":{"type":"string","minLength":1,"maxLength":600},
+                   "gradingCriteria":{"type":"string","minLength":1,"maxLength":300}}}}}}
             """;
 }

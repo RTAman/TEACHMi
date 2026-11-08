@@ -15,7 +15,8 @@ import tools.jackson.databind.ObjectMapper;
 class GeminiAnswerGrader implements RemoteAnswerGrader {
     static final String OPERATION = "assessment/grade";
     // 판정 규칙·스키마를 바꾸면 올린다.
-    static final String PROMPT_VERSION = "v2";
+    // v3: 문제 생성과 같은 출처 표기 규칙을 명시했다.
+    static final String PROMPT_VERSION = "v3";
     /** 보완 개념에 정답이 섞여 나오면 대신 쓰는 문장. 재설명과 리포트에 정답이 새지 않게 한다. */
     static final String SAFE_FOCUS = "문제에 적용한 핵심 원리와 그 이유를 다시 설명해 보세요.";
 
@@ -30,6 +31,11 @@ class GeminiAnswerGrader implements RemoteAnswerGrader {
             - reteachFocus: wrong일 때만, 학생이 다시 생각해 볼 개념이나 원리를 한 문장으로 쓴다.
               정답, 풀이 결과, 계산 값은 절대 쓰지 않는다. correct와 pending_review에는 빈 문자열을 쓴다.
             - reason: 판정 이유를 한 문장으로 쓴다(서버 검토용, 학생에게 보여주지 않는다).
+            출처 표기 규칙. 하나라도 어기면 서버가 응답 전체를 거절한다.
+            - sourceChunkIds에는 실제로 근거로 쓴 원문 조각 ID를 1개만 넣는다. 같은 ID를 두 번 넣지 않는다.
+            - sourceChunkIds의 ID마다 evidence를 정확히 1개씩 만든다. evidence 없는 ID를 남기지 않는다.
+            - evidence.quote는 그 원문 조각에서 6~40글자를 한 글자도 바꾸지 않고 그대로 복사한다.
+              띄어쓰기, 기호(÷, -, 괄호), 숫자 표기를 원문과 똑같이 쓰고, 요약하거나 문장을 이어 붙이지 않는다.
             """;
 
     private static final String SCHEMA = """
