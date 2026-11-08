@@ -67,7 +67,17 @@ AI 오류·한도·A 연동 대기에서도 전송한 사용자 입력은 DB에 
 
 재접속한 클라이언트는 저장된 userMessageId로 text를 읽고, pendingTurn의 키·원래 버전·kind로 같은 요청을 구성합니다. 도움 요청이면 text를 생략합니다. 새로운 GET version으로 원래 본문을 바꾸면 다른 요청으로 간주되므로 원래 expectedVersion을 사용하세요.
 
-생성 중에는 pendingTurn.state가 generating이고 availableActions는 wait입니다. 같은 전송의 동시 요청은 `503 TURN_IN_PROGRESS`, 다른 전송은 409입니다. 실패하면 retry_turn을 반환합니다. 성공한 키의 재전송은 저장한 200 응답을 반환하므로 최신 진행 상태는 GET으로 확인합니다.
+생성 중에는 pendingTurn.state가 generating이고 availableActions는 wait입니다. 같은 전송의 동시 요청은 `503 TURN_IN_PROGRESS`, 다른 전송은 409입니다. 일반 생성 실패는 retry_turn을 반환하지만 AI_GENERATION_UNCERTAIN·AI_ATTEMPT_LIMIT은 wait로 복원합니다. 성공한 키의 재전송은 저장한 200 응답을 반환하므로 최신 진행 상태는 GET으로 확인합니다.
+
+B의 AI 오류에는 선택적 `recovery`가 추가됩니다. 기존 code·message·currentSession과 성공 응답 형식은 유지합니다.
+
+```json
+{"stage":"TRANSPORT","diagnosticCode":"TRANSPORT_REQUEST_TIMEOUT","retryAllowed":false,"action":"review_required"}
+```
+
+`review_required`이면 저장된 입력을 보여주고 재전송을 중단합니다. 운영자는 같은 시각의 공급자 사용량과 원장을 확인해야 합니다. 동일 키로 다시 전송해도 불확실한 전송/재설명의 실행 토큰을 다시 열지 않습니다. 모델·프롬프트·출력 한도를 바꾼 새 생성 키도 같은 학습의 uncertain 또는 running 기록을 우회할 수 없습니다. 이 변경은 기존 원장을 초기화하거나 uncertain을 성공·실패로 판정하는 관리 API를 제공하지 않습니다.
+
+`retry_same_request`는 원문 인용 검증 등 실패에 대한 **사용자의 명시적 재전송**만 뜻하며 시도·사용량 한도가 적용됩니다. 기존 키·kind·본문·원래 expectedVersion을 유지하고 자동 반복하지 마세요. `wait`는 진행 중 결과/사용량 대기, `check_configuration`은 접근권한·모델 설정 확인, `limit_reached`는 시도 한도 도달을 뜻합니다.
 
 120초 실행 임대가 만료되면 interrupted 상태로 표시하고 같은 전송을 새 실행 토큰으로 이어갈 수 있습니다. 이전 작업자는 토큰이 바뀐 뒤 응답을 저장할 수 없습니다. Gemini의 처리 여부가 불명확한 기록은 기존 호출 기록 정책에 따라 자동 재호출이 보류됩니다. [Gemini 재시도 정책](GEMINI_CONTENT.md)
 

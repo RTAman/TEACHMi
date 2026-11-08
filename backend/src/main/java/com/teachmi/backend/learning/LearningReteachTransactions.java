@@ -25,7 +25,7 @@ public class LearningReteachTransactions {
     }
 
     record Job(UUID id, UUID sessionId, String memberId, String key, String body, String targetJson,
-               long inputVersion, UUID token, Instant leaseUntil, String state) {}
+               long inputVersion, UUID token, Instant leaseUntil, String state, String errorCode) {}
     record Claim(SessionView replay, Job job, LearningReteachGenerator.Context context) {}
     private record Fingerprint(String operation, UUID sessionId, StartReteachRequest request) {}
 
@@ -44,6 +44,7 @@ public class LearningReteachTransactions {
                     || !session.stage.equals("chat") || !java.util.List.of("failed", "generating").contains(existing.state())) {
                 throw access.conflict(session);
             }
+            if (GenerationRecovery.blocksRetry(existing.errorCode())) throw LearningException.retryBlocked(existing.errorCode(),access.view(session));
             verifyTarget(target(existing));
             if (existing.state().equals("generating") && existing.leaseUntil().isAfter(Instant.now())) {
                 throw new LearningException(503, "RETEACH_IN_PROGRESS", "재설명 질문을 준비 중입니다.", access.view(session));
@@ -204,7 +205,7 @@ public class LearningReteachTransactions {
                 (rs, row) -> new Job(rs.getObject("id", UUID.class), rs.getObject("session_id", UUID.class),
                         rs.getString("member_id"), rs.getString("request_key"), rs.getString("request_body"),
                         rs.getString("target_json"), rs.getLong("input_version"), rs.getObject("claim_token", UUID.class),
-                        rs.getTimestamp("lease_until").toInstant(), rs.getString("state")), member, key);
+                        rs.getTimestamp("lease_until").toInstant(), rs.getString("state"),rs.getString("error_code")), member, key);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 }

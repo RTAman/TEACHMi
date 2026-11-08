@@ -54,7 +54,21 @@ V4의 `learning_ai_generation`·`learning_ai_call`에 상태·검증된 결과·
 
 타임아웃·연결 단절·Google 5xx는 원격 처리·과금 여부를 확인하기 어려워 `uncertain`으로 기록하고 재호출을 보류합니다. 앱이 종료되어 120초 임대가 만료된 running 기록도 같은 방식으로 보류합니다. Google 로그·사용량과 해당 회원·세션의 기록을 운영자가 검토한 뒤 재실행 여부를 결정해야 합니다. 성공 기록은 보존합니다.
 
-`last_error_code`는 HTTP 상태나 예외 종류만 기록합니다. 키·프롬프트·원문·원본 오류 본문은 로그에 남기지 않습니다. 검증한 응답과 근거 인용문은 접근이 제한된 내부 DB 기록에 저장합니다. Google generateContent는 이 생성 키의 원격 멱등성을 보장하지 않으므로, 수신 결과를 모를 때는 운영 확인으로 중복 과금 위험을 줄입니다.
+`last_error_code`는 고정된 진단 코드만 기록합니다. 키·프롬프트·원문·원본 오류 본문·예외 메시지는 로그에 남기지 않습니다. 검증한 응답과 근거 인용문은 접근이 제한된 내부 DB 기록에 저장합니다. Google generateContent는 이 생성 키의 원격 멱등성을 보장하지 않으므로, 수신 결과를 모를 때는 운영 확인으로 중복 과금 위험을 줄입니다.
+
+B 대화·재설명 첫 질문은 `teachmi-dialogue-v2`·`teachmi-reteach-v2`를 사용합니다. 출처 1~2개와 ID당 정확히 하나의 인용, 원문에서 연속된 6~40자 그대로 복사를 요청하고 서버에서도 제한합니다. 띄어쓰기나 수식 기호를 보정해서 인용을 통과시키지 않습니다. 요약·최초 사례 질문의 v1 요청과 기존 성공 영수증은 유지하며, 동일 입력·모델·출력 설정의 이전 대화/재설명 성공 캐시도 현재 원문으로 재검증하여 추가 호출 없이 복원합니다.
+
+| 안전한 진단 | 의미 |
+| --- | --- |
+| CITATION_ID_INVALID / CITATION_ID_DUPLICATE | 출처 ID 오류 |
+| EVIDENCE_QUOTE_NOT_EXACT | 원문과 인용 불일치 |
+| JSON_SCHEMA_INVALID / CONTENT_JSON_INVALID | 응답 계약 / JSON 문법 오류 |
+| RESPONSE_MAX_TOKENS | 후보 응답 잘림 |
+| TRANSPORT_CONNECT_TIMEOUT / TRANSPORT_REQUEST_TIMEOUT | 연결 / 요청 시간 초과 |
+| UPSTREAM_HTTP_5xx / TRANSPORT_IO_FAILURE | 공급자 HTTP 오류 / 통신 중단 |
+| LEDGER_SUCCESS_WRITE_FAILED / LEDGER_FAILURE_WRITE_FAILED | 성공 / 실패 영수증 저장 확인 필요 |
+
+진단 단계는 TRANSPORT, RESPONSE_VALIDATION, CACHE_VALIDATION, LEDGER_CLAIM, LEDGER_SUCCESS_WRITE, LEDGER_FAILURE_WRITE로 구분합니다. 영수증 저장 실패는 running으로 남을 수 있으며 임대 만료 후에도 자동 인계하지 않습니다. 기존 `TRANSPORT_HttpTimeoutException` 기록은 읽을 때만 새 진단으로 매핑하고 원본 기록은 변경하지 않습니다. 모델·출력 설정·프롬프트를 변경해 생성 키가 달라져도 같은 학습의 미확인/진행 중 호출을 우회하지 못합니다. [오류 복구 응답](CONVERSATION_TURNS.md)의 review_required는 원장/사용량 확인이 필요하다는 뜻이며, 자동 재시도나 DB 초기화를 의미하지 않습니다.
 
 | HTTP·코드 | 의미 |
 | --- | --- |

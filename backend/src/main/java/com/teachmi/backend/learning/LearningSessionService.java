@@ -295,9 +295,10 @@ public class LearningSessionService {
     private List<String> actions(LearningSession session, TurnProgress pending, ReteachView active, ProblemReturn returned) {
         if (!session.status.equals("active")) return List.of();
         if (active != null && !active.state().equals("chat")) {
+            if (GenerationRecovery.blocksRetry(active.errorCode())) return List.of("wait");
             return active.state().equals("generating") ? List.of("wait") : List.of("retry_reteach");
         }
-        if (pending != null) return pending.state().equals("generating") ? List.of("wait") : List.of("retry_turn");
+        if (pending != null) return pending.state().equals("generating") || GenerationRecovery.blocksRetry(pending.errorCode()) ? List.of("wait") : List.of("retry_turn");
         return switch (session.stage) {
             case "mode" -> List.of("select_mode");
             case "summary" -> List.of("start_chat");

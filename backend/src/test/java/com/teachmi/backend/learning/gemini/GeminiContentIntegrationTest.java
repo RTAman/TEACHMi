@@ -120,6 +120,24 @@ class GeminiContentIntegrationTest {
         verify(transport).generate(anyString());
     }
 
+    @Test void historicalDialogueAndReteachSuccessesAreRestoredWithoutAnotherReservation() throws Exception {
+        var content=LegacyDialogueRequestsTest.content();
+        for(String kind:List.of("dialogue","reteach")) {
+            String request=java.nio.file.Files.readString(java.nio.file.Path.of("src/test/resources/gemini-legacy/"+kind+"-v1.json"));
+            String key=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(
+                    ("teachmi-"+kind+"-v1\n"+settings.model()+"\n"+request).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            ledger.claim(key,content,request.getBytes(java.nio.charset.StandardCharsets.UTF_8).length);
+            var envelope=json.readTree(kind.equals("dialogue")?GeminiFixtures.dialogueResponse(json,true):GeminiFixtures.response(json,false));
+            ledger.succeed(key,envelope.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText());
+        }
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        assertThat(generator.reply(LegacyDialogueRequestsTest.dialogue()).accepted()).isTrue();
+        assertThat(generator.opening(LegacyDialogueRequestsTest.reteach()).sourceChunkIds()).containsExactly("k01");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class)).isEqualTo(2);
+        verifyNoInteractions(transport);
+    }
+
     @Test
     void geminiReplyUsesSavedUserInputAndAdvancesTheServerStage() throws Exception {
         mode("review", "review");
@@ -159,14 +177,65 @@ class GeminiContentIntegrationTest {
     @Test
     void uncertainGeminiReplyPreservesTheAnswerAndDoesNotGenerateAgainOnRetry() throws Exception {
         mode("review", "review");
-        doThrow(new GeminiCallFailure(true, 503, "AI_GENERATION_UNCERTAIN", 0))
+        doThrow(new GeminiCallFailure(true, 503, "AI_GENERATION_UNCERTAIN", 0,"TRANSPORT_REQUEST_TIMEOUT"))
                 .when(transport).generate(anyString());
-        assertThat(turn("answer", "answer", "저장할 답변").getResponse().getStatus()).isEqualTo(503);
+        var failed=turn("answer", "answer", "저장할 답변");
+        assertThat(failed.getResponse().getStatus()).isEqualTo(503);
+        var recovery=json.readTree(failed.getResponse().getContentAsByteArray()).path("recovery");
+        assertThat(recovery.path("diagnosticCode").asText()).isEqualTo("TRANSPORT_REQUEST_TIMEOUT");
+        assertThat(recovery.path("retryAllowed").asBoolean()).isFalse();
+        assertThat(recovery.path("action").asText()).isEqualTo("review_required");
         var pending = sessions.get("u1", UUID.fromString(id));
         assertThat(pending.messages()).hasSize(2);
         assertThat(pending.pendingTurn().state()).isEqualTo("failed");
+        assertThat(pending.availableActions()).containsExactly("wait");
+        var turnBefore=jdbc.queryForList("SELECT * FROM teachmi.learning_turn");
+        var ledgerBefore=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
         assertThat(turn("answer", "answer", "저장할 답변").getResponse().getStatus()).isEqualTo(503);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_turn")).isEqualTo(turnBefore);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(ledgerBefore);
         verify(transport, times(2)).generate(anyString());
+    }
+
+    @Test void aBadQuotePreservesTheAnswerAndAnExplicitBoundedRetryCanRecover() throws Exception {
+        mode("review","review");
+        doReturn(GeminiFixtures.dialogueResponse(json,true).replace(GeminiFixtures.QUOTE,"복사하지 않은 인용문입니다."))
+                .when(transport).generate(anyString());
+        var failed=turn("quote","answer","저장된 사용자 답변");
+        assertThat(failed.getResponse().getStatus()).isEqualTo(502);
+        var body=json.readTree(failed.getResponse().getContentAsByteArray());
+        assertThat(body.path("recovery").path("diagnosticCode").asText()).isEqualTo("EVIDENCE_QUOTE_NOT_EXACT");
+        assertThat(body.path("recovery").path("retryAllowed").asBoolean()).isTrue();
+        assertThat(sessions.get("u1",UUID.fromString(id)).pendingTurn()).isNotNull();
+        doReturn(GeminiFixtures.dialogueResponse(json,true)).when(transport).generate(anyString());
+        assertThat(turn("quote","answer","저장된 사용자 답변").getResponse().getStatus()).isEqualTo(200);
+        assertThat(sessions.get("u1",UUID.fromString(id)).messages().stream().filter(m -> m.role().equals("user"))).hasSize(1);
+        verify(transport,times(3)).generate(anyString());
+    }
+
+    @Test void anUncertainReteachOpeningWaitsWithoutReopeningItsClaim() throws Exception {
+        mode("review","review");
+        jdbc.update("UPDATE teachmi.learning_session SET stage='problem' WHERE id=?",UUID.fromString(id));
+        doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"UPSTREAM_HTTP_503")).when(transport).generate(anyString());
+        String payload="{\"problemId\":\"p01\",\"attemptId\":\"a01\",\"expectedVersion\":1}";
+        var request=post("/api/v1/sessions/"+id+"/reteach").principal(() -> "u1").header("Idempotency-Key","reteach").contentType("application/json").content(payload);
+        assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(503);
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_reteach");
+        assertThat(sessions.get("u1",UUID.fromString(id)).availableActions()).containsExactly("wait");
+        assertThat(mvc.perform(request).andReturn().getResponse().getStatus()).isEqualTo(503);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_reteach")).isEqualTo(before);
+        verify(transport,times(2)).generate(anyString());
+    }
+
+    @Test void newDialogueRejectsDuplicateEvidenceEvenWhenEachQuoteIsGrounded() throws Exception {
+        mode("review","review");
+        var envelope=(tools.jackson.databind.node.ObjectNode)json.readTree(GeminiFixtures.dialogueResponse(json,true));
+        var payload=(tools.jackson.databind.node.ObjectNode)json.readTree(envelope.path("candidates").get(0).path("content").path("parts").get(0).path("text").asText());
+        ((tools.jackson.databind.node.ArrayNode)payload.get("evidence")).add(payload.get("evidence").get(0).deepCopy());
+        doReturn(GeminiFixtures.envelope(json,json.writeValueAsString(payload),"STOP")).when(transport).generate(anyString());
+        var result=turn("duplicates","answer","설명입니다.");
+        assertThat(result.getResponse().getStatus()).isEqualTo(502);
+        assertThat(json.readTree(result.getResponse().getContentAsByteArray()).path("recovery").path("diagnosticCode").asText()).isEqualTo("CITATION_CARDINALITY_INVALID");
     }
 
     private org.springframework.test.web.servlet.MvcResult turn(String key, String kind, String text) throws Exception {

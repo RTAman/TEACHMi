@@ -31,7 +31,7 @@ public class LearningTurnTransactions {
 
     record Pending(UUID id, UUID sessionId, String memberId, String key, String body, String kind,
                    String text, String chatStage, UUID userMessageId, UUID targetMessageId,
-                   long inputVersion, long expectedVersion, UUID claimToken, Instant leaseUntil, String state, UUID reteachId) {}
+                   long inputVersion, long expectedVersion, UUID claimToken, Instant leaseUntil, String state, UUID reteachId, String errorCode) {}
     record Claim(SessionView replay, Pending pending, LearningDialogueGenerator.Context context) {}
     private record Fingerprint(String operation, UUID sessionId, TurnRequest request) {}
 
@@ -50,6 +50,7 @@ public class LearningTurnTransactions {
             if (!existing.id().equals(session.pendingTurnId) || existing.inputVersion() != session.version) {
                 throw access.conflict(session);
             }
+            if (GenerationRecovery.blocksRetry(existing.errorCode())) throw LearningException.retryBlocked(existing.errorCode(),access.view(session));
             if (existing.state().equals("generating") && existing.leaseUntil().isAfter(Instant.now())) {
                 throw new LearningException(503, "TURN_IN_PROGRESS", "같은 전송을 처리 중입니다.", access.view(session));
             }
@@ -185,7 +186,7 @@ public class LearningTurnTransactions {
                 rs.getString("kind"), rs.getString("text"), rs.getString("chat_stage"),
                 rs.getObject("user_message_id", UUID.class), rs.getObject("target_message_id", UUID.class),
                 rs.getLong("input_version"), rs.getLong("expected_version"), rs.getObject("claim_token", UUID.class),
-                rs.getTimestamp("lease_until").toInstant(), rs.getString("state"), rs.getObject("reteach_id", UUID.class)), member, key);
+                rs.getTimestamp("lease_until").toInstant(), rs.getString("state"), rs.getObject("reteach_id", UUID.class),rs.getString("error_code")), member, key);
         return rows.isEmpty() ? null : rows.getFirst();
     }
 }

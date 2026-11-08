@@ -58,13 +58,23 @@ final class GeminiHttpTransport implements GeminiTransport {
             return new String(response.body(), StandardCharsets.UTF_8);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new GeminiCallFailure(true, 503, "AI_GENERATION_UNCERTAIN", 0);
+            throw new GeminiCallFailure(true, 503, "AI_GENERATION_UNCERTAIN", 0,"TRANSPORT_INTERRUPTED");
+        } catch (java.net.http.HttpConnectTimeoutException ex) {
+            throw new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_CONNECT_TIMEOUT");
+        } catch (java.net.http.HttpTimeoutException ex) {
+            throw new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT");
         } catch (IOException ex) {
             // A timeout or a broken connection may happen after Google has accepted/billed the call.
             throw new GeminiCallFailure(true, 503, "AI_GENERATION_UNCERTAIN", 0,
-                    "TRANSPORT_" + ex.getClass().getSimpleName());
+                    oversized(ex)?"TRANSPORT_RESPONSE_TOO_LARGE":"TRANSPORT_IO_FAILURE");
         }
     }
+
+    private static boolean oversized(Throwable failure) {
+        for(int i=0;failure!=null && i<8;i++,failure=failure.getCause()) if(failure instanceof ResponseTooLarge) return true;
+        return false;
+    }
+    private static final class ResponseTooLarge extends IOException {}
 
     private static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
         private final HttpResponse.BodySubscriber<byte[]> delegate = HttpResponse.BodySubscribers.ofByteArray();
@@ -80,7 +90,7 @@ final class GeminiHttpTransport implements GeminiTransport {
                 received += item.remaining();
                 if (received > 131072) {
                     subscription.cancel();
-                    delegate.onError(new IOException("Gemini response exceeded limit"));
+                    delegate.onError(new ResponseTooLarge());
                     return;
                 }
             }
