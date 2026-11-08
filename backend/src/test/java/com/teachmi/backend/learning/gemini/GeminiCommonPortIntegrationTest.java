@@ -110,6 +110,21 @@ class GeminiCommonPortIntegrationTest {
     }
     String envelope(JsonNode value) { return GeminiFixtures.envelope(json,json.writeValueAsString(value),"STOP"); }
     String generate(Request request) { return port.generate(request,node -> node.path("result").asText()); }
+    Request shortRequest() {
+        var old=request("assessment/problems");
+        return new Request(scope,old.operation(),"v5",old.instruction(),old.input(),old.schema(),CitationPolicy.SHORT_EXACT);
+    }
+    void shortResponse() {
+        doAnswer(call -> {
+            var request=json.readTree(call.getArgument(0,String.class));
+            var data=json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
+            var candidate=data.path("citationCandidates").get(0);
+            var value=(tools.jackson.databind.node.ObjectNode)payload("원가 배분");
+            value.set("evidence",json.valueToTree(List.of(Map.of("sourceChunkId",candidate.path("sourceChunkId").asText(),
+                    "quote",candidate.path("quote").asText()))));
+            return envelope(value);
+        }).when(transport).generate(anyString());
+    }
     long calls() { return jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class); }
     void error(Runnable action,String code) {
         assertThatThrownBy(action::run).isInstanceOfSatisfying(LearningException.class,e -> assertThat(e.code()).isEqualTo(code));
@@ -122,6 +137,136 @@ class GeminiCommonPortIntegrationTest {
         return new GeminiSettings(settings.apiKey(),settings.model(),settings.connectTimeout(),settings.requestTimeout(),
                 budget.equals("minute")?1:100,budget.equals("day")?1:100,budget.equals("member")?1:100,
                 settings.maxAttempts(),settings.maxSourceChars(),settings.maxOutputTokens());
+    }
+
+    @Test void shortCandidatesAreAuthorizedBoundedAndDurableWithoutADuplicateReservation() {
+        shortResponse();
+        var request=shortRequest();
+        assertThat(generate(request)).isEqualTo("원가 배분");
+        var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        assertThat(scoped(settings,ledger).<String>generate(request,node -> node.path("result").asText())).isEqualTo("원가 배분");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(rows);
+        var captured=org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(transport).generate(captured.capture());
+        var wire=json.readTree(captured.getValue());
+        var data=json.readTree(wire.path("contents").get(0).path("parts").get(0).path("text").asText());
+        var choices=wire.path("generationConfig").path("responseJsonSchema").path("properties").path("evidence").path("items").path("properties").path("quote");
+        assertThat(choices.path("maxLength").asInt()).isEqualTo(40);
+        assertThat(data.path("citationCandidates").size()).isBetween(1,8);
+        for(var candidate:data.path("citationCandidates")) {
+            assertThat(candidate.path("sourceChunkId").asText()).isEqualTo(scope.sourceChunkIds().getFirst());
+            String quote=candidate.path("quote").asText();
+            assertThat(quote.length()).isBetween(6,40);
+            assertThat(GeminiFixtures.SOURCE).contains(quote);
+            assertThat(choices.path("enum")).contains(json.valueToTree(quote));
+        }
+        assertThat(calls()).isEqualTo(1);
+        // Even a cached hit must recheck A ownership.
+        var other=UUID.randomUUID();
+        jdbc.update("INSERT INTO teachmi.app_user(id,email,password_hash,created_at) VALUES (?,?,'unused-test-hash',now())",other,other+"@example.test");
+        jdbc.update("UPDATE teachmi.material SET user_id=? WHERE id=?::uuid",other,scope.materialId());
+        error(() -> generate(request),"NOT_FOUND");
+        verify(transport).generate(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"long","not-candidate","not-exact","unknown-id","wrong-schema"})
+    void shortResponseFailuresRemainSpecificAndNeverBecomeSuccess(String defect) {
+        var value=(tools.jackson.databind.node.ObjectNode)payload("원가 배분");
+        String quote=switch(defect) {
+            case "long" -> GeminiFixtures.SOURCE.substring(0,42);
+            case "not-candidate" -> GeminiFixtures.SOURCE.substring(1,20);
+            case "not-exact" -> "존재하지 않는 인용문입니다.";
+            default -> ShortCitationCandidates.from(List.of(new LearningSourceReader.Chunk(scope.sourceChunkIds().getFirst(),GeminiFixtures.SOURCE))).getFirst().quote();
+        };
+        value.set("evidence",json.valueToTree(List.of(Map.of("sourceChunkId",scope.sourceChunkIds().getFirst(),"quote",quote))));
+        if(defect.equals("unknown-id")) value.set("sourceChunkIds",json.valueToTree(List.of("unowned")));
+        if(defect.equals("wrong-schema")) value.put("result",true);
+        doReturn(envelope(value)).when(transport).generate(anyString());
+        var failure=catchThrowableOfType(() -> generate(shortRequest()),LearningException.class);
+        assertThat(failure.code()).isEqualTo("INVALID_GEMINI_RESPONSE");
+        assertThat(failure.recovery().diagnosticCode()).isEqualTo(switch(defect) {
+            case "long" -> "EVIDENCE_QUOTE_TOO_LONG";
+            case "not-candidate" -> "EVIDENCE_CANDIDATE_INVALID";
+            case "not-exact" -> "EVIDENCE_QUOTE_NOT_EXACT";
+            case "unknown-id" -> "CITATION_ID_INVALID";
+            default -> "JSON_SCHEMA_INVALID";
+        });
+        assertThat(jdbc.queryForObject("SELECT state FROM teachmi.learning_ai_generation",String.class)).isEqualTo("failed");
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @Test void aValidHistoricalStandardSuccessIsReadWithoutAnyNewReceiptOrQuotaEvenAtTheLimit() {
+        var previous=request("assessment/problems");
+        assertThat(generate(previous)).isEqualTo("원가 배분"); // Old exact quote is valid but is not a candidate.
+        var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var budget=limits("minute");
+        try(var store=new GeminiLedger(database,budget)) {
+            assertThat(scoped(budget,store).<String>generateWithPreviousSuccess(shortRequest(),previous,node -> node.path("result").asText())).isEqualTo("원가 배분");
+        }
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(rows);
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"uncertain","expired"})
+    void shortPolicyNeverBypassesAnUnresolvedStandardRequestOrChangesIt(String state) {
+        var previous=request("assessment/problems");
+        if(state.equals("uncertain")) {
+            doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT")).when(transport).generate(anyString());
+            error(() -> generate(previous),"AI_GENERATION_UNCERTAIN");
+        } else {
+            ledger.claim("historical",scope.memberId(),scope.sessionId(),100);
+            jdbc.update("UPDATE teachmi.learning_ai_generation SET lease_until=now()-interval '1 second'");
+        }
+        var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        error(() -> port.generateWithPreviousSuccess(shortRequest(),previous,node -> node),"AI_GENERATION_UNCERTAIN");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(rows);
+        assertThat(calls()).isEqualTo(1);
+        verify(transport,times(state.equals("uncertain")?1:0)).generate(anyString());
+    }
+
+    @Test void noUsableCandidateFailsBeforeReservationAndNeverInventsOrExtendsText() {
+        jdbc.update("UPDATE teachmi.source_chunk SET text='짧음' WHERE id=?::uuid",scope.sourceChunkIds().getFirst());
+        error(() -> generate(shortRequest()),"LEARNING_SOURCE_INCOMPLETE");
+        assertThat(calls()).isZero();
+        verifyNoInteractions(transport);
+    }
+
+    @Test void historicalFallbackCannotCrossScopeOrOperation() {
+        var previous=request("assessment/grade");
+        error(() -> port.generateWithPreviousSuccess(shortRequest(),previous,node -> node),"INVALID_AI_REQUEST");
+        assertThat(calls()).isZero();
+        verifyNoInteractions(transport);
+    }
+
+    @Test void historicalFallbackCannotRestoreADifferentInputOrSchema() {
+        var base=request("assessment/problems");
+        var changed=new Request(scope,base.operation(),"v4",base.instruction(),json.readTree("{\"task\":\"다른 설명\"}"),base.schema());
+        error(() -> port.generateWithPreviousSuccess(shortRequest(),changed,node -> node),"INVALID_AI_REQUEST");
+        assertThat(calls()).isZero();
+        verifyNoInteractions(transport);
+    }
+
+    @Test void anExplicitNewPromptDoesNotRewriteThePreviouslyFailedLongQuoteReceipt() {
+        var base=request("assessment/problems");
+        var previous=new Request(scope,base.operation(),"v4",base.instruction(),base.input(),base.schema());
+        doReturn(envelope(payload("원가 배분"))).when(transport).generate(anyString());
+        error(() -> port.generate(previous,node -> {throw new GeminiResponseFailure("EVIDENCE_QUOTE_TOO_LONG");}),"INVALID_GEMINI_RESPONSE");
+        var old=jdbc.queryForMap("SELECT * FROM teachmi.learning_ai_generation");
+        shortResponse();
+        assertThat(port.<String>generateWithPreviousSuccess(shortRequest(),previous,node -> node.path("result").asText())).isEqualTo("원가 배분");
+        assertThat(jdbc.queryForMap("SELECT * FROM teachmi.learning_ai_generation WHERE generation_key=?",old.get("generation_key"))).isEqualTo(old);
+        assertThat(calls()).isEqualTo(2);
+    }
+
+    @Test void shortPolicyRetainsTheExistingAttemptLimit() {
+        doReturn("invalid envelope").when(transport).generate(anyString());
+        error(() -> generate(shortRequest()),"INVALID_GEMINI_RESPONSE");
+        error(() -> generate(shortRequest()),"INVALID_GEMINI_RESPONSE");
+        error(() -> generate(shortRequest()),"AI_ATTEMPT_LIMIT");
+        assertThat(calls()).isEqualTo(2);
+        verify(transport,times(2)).generate(anyString());
     }
 
     @Test void authorizedRawTextAndValidatedResultAreDurableAcrossPortInstances() {
