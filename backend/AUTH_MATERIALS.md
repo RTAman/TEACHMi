@@ -114,6 +114,34 @@ $auth = @{ BaseUri = [uri]'http://localhost:8080'; WebSession = $web; AuthHeader
 
 `V8__create_members_and_materials.sql`이 `app_user`, `auth_session`, `material`, `source_chunk`, `concept`, `concept_source`, `material_request`를 만듭니다. B의 `learning_session.member_id`·`material_id`·`concept_id`는 문자열 그대로 두었고 FK는 걸지 않았습니다. `V12__add_material_files.sql`이 업로드 원본 테이블 `material_file`과 분석 중 자료 인덱스를 추가합니다. 배포 DB에는 V1부터 번호 순서대로 적용되며 V12는 V8의 `material`에만 의존합니다.
 
+## 배포 검수
+
+배포한 서버에 [api/Test-AuthMaterialsDeployment.ps1](api/Test-AuthMaterialsDeployment.ps1)을 실행하면 A파트 항목 24개를 한 번에 확인합니다. Windows PowerShell 5.1과 PowerShell 7(Windows·macOS·Linux)에서 동작합니다.
+
+```powershell
+cd backend
+# 프론트 rewrite를 거쳐 확인 (쿠키·CSRF가 실제 사용자와 같은 경로)
+powershell -ExecutionPolicy Bypass -File ./api/Test-AuthMaterialsDeployment.ps1 -BaseUri https://teachmi-frontend.vercel.app
+# 백엔드 주소로 직접 확인
+pwsh ./api/Test-AuthMaterialsDeployment.ps1 -BaseUri https://<백엔드 배포 주소>
+```
+
+| 확인 항목 | 기대 결과 |
+| --- | --- |
+| 가입·중복 가입(대소문자 무시) | 201, 409 |
+| 틀린 비밀번호·없는 이메일 | 같은 본문의 401 |
+| 로그인 쿠키 | HttpOnly, HTTPS 주소면 Secure까지 |
+| `/auth/me` 로그인·비로그인 | 200, 401 |
+| 직접 입력 자료, CSRF 헤더 없는 변경 | 201, 403 |
+| PDF 업로드 → 분석 | 202 → done, 개념 후보 2개 |
+| 지원하지 않는 형식 | 415 |
+| 글자 없는 PDF → 다시 시도 | failed/no_text → 202 |
+| 다른 회원의 자료 조회·개념 수정·학습 시작 | 모두 404 |
+| 업로드 자료 개념으로 B 학습 시작 | 201 (AI 호출 없음) |
+| 로그아웃 → 이전 쿠키 재사용 → 재로그인 | 204 → 401 → 내 자료 200 |
+
+매 실행마다 `qa-a-<시각>@example.com`, `qa-b-<시각>@example.com` 계정을 새로 만들고 비밀번호는 무작위로 생성해 출력하지 않습니다. 검수 계정과 자료는 서버에 남습니다. 실패가 있거나 서버에 연결할 수 없으면 종료 코드 1입니다.
+
 ## 확인 방법
 
 `backend/`에서 `.\gradlew.bat build`. `AuthApiTest`는 가입 정규화·중복·동시 가입, 쿠키 속성, 동일한 로그인 실패 응답과 429, CSRF, 로그아웃 뒤 쿠키 재사용 401, 만료를 검사합니다. `MaterialApiTest`는 직접 입력·키 재사용, 타인 접근 404, 개념 추가·수정, B 어댑터와 실제 `POST /api/v1/sessions` 연결을 검사합니다. `MaterialUploadApiTest`는 테스트 안에서 만든 PDF·PPTX(한글)·PPT로 업로드 → 분석 → 개념 후보 → B 학습 생성, 글자 없는 파일·손상 파일 실패와 직접 입력 복구, 재시도, 늦은 결과 폐기, 재시작 재개, 형식·용량·키 검사를 확인합니다.
