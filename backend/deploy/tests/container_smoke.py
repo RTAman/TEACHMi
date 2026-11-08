@@ -8,8 +8,6 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 import uuid
 
 HERE = Path(__file__).resolve().parents[1]
@@ -193,25 +191,22 @@ def main():
                     "caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"])
             checks_network = original_config["networks"]["edge"]["name"]
             docker(["run", "-d", "--name", proxy_name, "--label", "io.teachmi.ci=" + project,
-                    "--network", checks_network, "-p", "127.0.0.1::8080",
+                    "--network", checks_network,
                     "-e", "TEACHMI_DOMAIN=http://:8080", "-e", "ACME_EMAIL=ci@localhost.test",
                     "-v", str(HERE / "Caddyfile") + ":/etc/caddy/Caddyfile:ro", proxy_image])
-            binding = docker(["port", proxy_name, "8080/tcp"]).decode().strip()
+            # An internal-only CI network has no host-facing gateway/port binding.
+            # Exercise Caddy through the app's private network, without publishing a test port.
+            def status(path):
+                return int(operation.capture(["exec", "-T", "app", "curl", "--noproxy", "*", "-sS",
+                    "--max-time", "3", "-o", "/dev/null", "-w", "%{http_code}",
+                    "http://" + proxy_name + ":8080" + path]).decode())
             for _ in range(30):
                 try:
-                    urllib.request.urlopen("http://" + binding + "/api/v1/auth/me", timeout=2)
-                except urllib.error.HTTPError as error:
-                    if error.code == 401:
+                    if status("/api/v1/auth/me") == 401:
                         break
-                except OSError:
+                except ops.OpsError:
                     pass
                 time.sleep(1)
-            def status(path):
-                try:
-                    with urllib.request.build_opener(urllib.request.ProxyHandler({})).open("http://" + binding + path, timeout=3) as response:
-                        return response.status
-                except urllib.error.HTTPError as error:
-                    return error.code
             check(status("/api/v1/auth/me") == 401, "Proxy preserves /api path")
             check(status("/actuator/health") == 404, "Public actuator access blocked")
             # Restart only the CI app against the new restored DB. AI remains disabled and egress blocked.
