@@ -135,8 +135,16 @@ public class LearningTurnTransactions {
         }
         session.pendingTurnId = null;
         session.touch();
+        // Navigation follows the validated server transition. The model's cached payload stays untouched.
+        String guidance = switch (kind) {
+            case "learning_complete" -> "이제 응용문제를 풀어 보세요.";
+            case "reteach_complete" -> "같은 문제에 다시 도전해 보세요.";
+            default -> null;
+        };
+        String text = guidance == null || reply.text().endsWith(guidance)
+                ? reply.text() : reply.text() + "\n\n" + guidance;
         var assistant = new LearningMessage(session.id, user.sequence + 1,
-                "assistant", kind, session.chatStage, reply.text(), json.writeValueAsString(reply.sourceChunkIds()),
+                "assistant", kind, session.chatStage, text, json.writeValueAsString(reply.sourceChunkIds()),
                 turn.kind().equals("answer") ? null : user.supportEventId);
         assistant.reteachId = turn.reteachId();
         assistant = messages.saveAndFlush(assistant);

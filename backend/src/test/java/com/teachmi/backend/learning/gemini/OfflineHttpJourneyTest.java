@@ -201,7 +201,11 @@ class OfflineHttpJourneyTest {
     void finishChat(Member member,String session) throws Exception {
         int attempts=0;
         while(state(member,session).path("stage").asText().equals("chat") && attempts++<5) turn(member,session,"answer");
-        check("conversation reaches existing problem stage",state(member,session).path("stage").asText().equals("problem"));
+        var completed=state(member,session);
+        check("conversation reaches existing problem stage",completed.path("stage").asText().equals("problem"));
+        String guidance=completed.path("problemReturn").isObject()?"같은 문제에 다시 도전해 보세요.":"이제 응용문제를 풀어 보세요.";
+        check("completed dialogue includes server navigation guidance",completed.path("messages").get(completed.path("messages").size()-1)
+                .path("text").asText().endsWith(guidance));
     }
     JsonNode submit(Member member,String session,String problem,String answer) throws Exception {
         String key=UUID.randomUUID().toString();
