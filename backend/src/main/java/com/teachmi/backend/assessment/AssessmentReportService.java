@@ -48,14 +48,15 @@ class AssessmentReportService {
     private final AssessmentReportRepository reports;
     private final ObjectMapper json;
     private final LearningCommands commands;
+    private final ReportComparisons comparisons;
     private final LearningHesitationService hesitations;
     private final ObjectProvider<KeyPointEvaluator> keyPointEvaluators;
 
     AssessmentReportService(LearningSessionService sessions, LearningEvidenceService evidence,
                             LearningAssessmentService transitions, AssessmentProblemRepository problems,
                             AssessmentAttemptRepository attempts, AssessmentReportRepository reports, ObjectMapper json,
-                            LearningCommands commands, LearningHesitationService hesitations,
-                            ObjectProvider<KeyPointEvaluator> keyPointEvaluators) {
+                            LearningCommands commands, ReportComparisons comparisons,
+                            LearningHesitationService hesitations, ObjectProvider<KeyPointEvaluator> keyPointEvaluators) {
         this.sessions = sessions;
         this.evidence = evidence;
         this.transitions = transitions;
@@ -64,6 +65,7 @@ class AssessmentReportService {
         this.reports = reports;
         this.json = json;
         this.commands = commands;
+        this.comparisons = comparisons;
         this.hesitations = hesitations;
         this.keyPointEvaluators = keyPointEvaluators;
     }
@@ -194,7 +196,8 @@ class AssessmentReportService {
         var content = json.readValue(report.content, ReportContent.class);
         return new ReportView(report.id, report.sessionId, report.confirmedAt == null ? "ready" : "confirmed",
                 report.createdAt, report.confirmedAt, content.concept(), content.explanation(),
-                content.application(), content.nextSteps(), content.keyPoints(), content.flow());
+                content.application(), content.nextSteps(), content.keyPoints(), content.flow(),
+                comparisons.of(report.memberId, report.sessionId, content));
     }
 
     private static Quote quote(LearningMessageView message) {

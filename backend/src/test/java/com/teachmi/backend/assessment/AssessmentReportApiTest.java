@@ -69,6 +69,7 @@ class AssessmentReportApiTest {
     @Autowired AssessmentReportRepository reportStore;
     @Autowired LearningAssessmentService transitions;
     @Autowired LearningCommands commands;
+    @Autowired ReportComparisons comparisons;
     @Autowired com.teachmi.backend.learning.LearningHesitationService hesitations;
     MockMvc mvc;
     Login owner;
@@ -227,6 +228,89 @@ class AssessmentReportApiTest {
         assertThat(confirm(other, "c1").getStatus()).isEqualTo(404);
     }
 
+    @Test
+    void aFirstLearningHasNoComparison() throws Exception {
+        finishCorrectly();
+        assertThat(body(publish(owner, "p1")).path("comparison").isNull()).as("처음 배우는 개념은 비교 카드를 숨긴다").isTrue();
+    }
+
+    @Test
+    void theReportIsComparedWithTheImmediatelyPreviousLearningOfTheSameConcept() throws Exception {
+        // 같은 개념의 지난 학습 두 개. 더 최근 것(어제)이 비교 대상이다.
+        pastReport(owner.id(), "m", "c", "3 days", 5, 0, 4);
+        var yesterday = pastReport(owner.id(), "m", "c", "1 day", 2, 1, 3);
+        // 비교 대상이 아닌 기록: 다른 개념, 다른 자료, 다른 회원, 리포트가 없는 학습.
+        pastReport(owner.id(), "m", "other-concept", "2 hours", 9, 9, 9);
+        pastReport(owner.id(), "other-material", "c", "2 hours", 9, 9, 9);
+        pastReport(login().id(), "m", "c", "2 hours", 9, 9, 9);
+        pastSession(owner.id(), "m", "c", "1 hour");
+        // 이번 학습: 힌트 1번, 쉬운 예시 0번, "잘 모르겠어" 1번을 요청했다.
+        support(session, "hint");
+        support(session, "dont_know");
+        finishCorrectly();
+
+        var comparison = body(publish(owner, "p1")).path("comparison");
+        assertThat(comparison.path("previousSessionId").asText()).isEqualTo(yesterday.toString());
+        assertThat(comparison.path("previousStudiedAt").isNull()).isFalse();
+        assertThat(comparison.path("keyElements").isNull()).as("핵심 요소 데이터가 생기기 전까지 비운다").isTrue();
+        assertThat(comparison.path("hints").path("previous").asInt()).as("힌트 2 + 쉬운 예시 1").isEqualTo(3);
+        assertThat(comparison.path("hints").path("current").asInt()).isEqualTo(1);
+        assertThat(comparison.path("hesitations").path("previous").asInt()).isEqualTo(3);
+        assertThat(comparison.path("hesitations").path("current").asInt()).isEqualTo(1);
+        assertThat(body(getReport(owner)).path("comparison")).as("다시 열어도 같은 비교").isEqualTo(comparison);
+    }
+
+    /**
+     * 학생이 도움(hint, example, dont_know)을 요청한 기록을 B의 형식대로 넣는다.
+     * AI 학생의 질문(target) 다음에 학생의 요청 메시지(request)가 오고, 둘 다 같은 도움 기록을 가리킨다.
+     */
+    private void support(UUID sessionId, String kind) {
+        long next = jdbc.queryForObject("SELECT max(sequence) FROM teachmi.learning_message WHERE session_id=?",
+                Long.class, sessionId) + 1;
+        var target = UUID.randomUUID();
+        var request = UUID.randomUUID();
+        var event = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO teachmi.learning_message
+                (id,session_id,sequence,role,kind,chat_stage,text,source_chunk_ids,created_at)
+                VALUES (?,?,?,'assistant','case_question','case','왜 그렇게 생각해?','[]',now())
+                """, target, sessionId, next);
+        jdbc.update("""
+                INSERT INTO teachmi.learning_message
+                (id,session_id,sequence,role,kind,chat_stage,text,source_chunk_ids,created_at,support_event_id)
+                VALUES (?,?,?,'user',?,'case','도움 요청','[]',now(),?)
+                """, request, sessionId, next + 1, kind, event);
+        jdbc.update("""
+                INSERT INTO teachmi.learning_support_event (id,session_id,kind,target_message_id,request_message_id,created_at)
+                VALUES (?,?,?,?,?,now())
+                """, event, sessionId, kind, target, request);
+    }
+
+    /** 지정한 시간 전에 시작해 리포트까지 받은 학습을 만든다. 리포트에는 요청한 도움 횟수만 넣는다. */
+    private UUID pastReport(String member, String material, String concept, String ago, int hint, int example,
+                            int dontKnow) {
+        var id = pastSession(member, material, concept, ago);
+        jdbc.update("""
+                INSERT INTO teachmi.assessment_report
+                (id,session_id,member_id,revision,evidence_version,content,created_at)
+                VALUES (?,?,?,0,1,?,now() - ?::interval)
+                """, UUID.randomUUID(), id, member,
+                "{\"explanation\":{\"requestedSupport\":{\"total\":%d,\"hint\":%d,\"example\":%d,\"dontKnow\":%d}}}"
+                        .formatted(hint + example + dontKnow, hint, example, dontKnow), ago);
+        return id;
+    }
+
+    private UUID pastSession(String member, String material, String concept, String ago) {
+        var id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO teachmi.learning_session
+                (id,member_id,material_id,concept_id,concept_snapshot,mode,stage,status,version,created_at,updated_at)
+                VALUES (?,?,?,?,'{"name":"감가상각","scope":"원가 배분","sourceChunkIds":["trig-source"]}',
+                'review','report','completed',1,now() - ?::interval,now() - ?::interval)
+                """, id, member, material, concept, ago, ago);
+        return id;
+    }
+
     /**
      * 실제 대화처럼 처음 설명(case)과 마지막 설명(wrapup)을 가진 학습을 만든다.
      * B의 근거 조회는 마지막 설명보다 앞선 처음 설명이 없으면 연결 오류로 본다.
@@ -266,7 +350,7 @@ class AssessmentReportApiTest {
         }
     }
 
-private void finishCorrectly() throws Exception { submit(first,"a1","200만원"); submit(second,"a2","180만원"); }
+    private void finishCorrectly() throws Exception { submit(first,"a1","200만원"); submit(second,"a2","180만원"); }
 
     @Test void aReportCommittedBetweenTheAbsenceCheckAndEvidenceReadStillReplaysSafely() throws Exception {
         finishCorrectly();
@@ -277,7 +361,7 @@ private void finishCorrectly() throws Exception { submit(first,"a1","200만원")
             }
         };
         var racing=new AssessmentReportService(sessions,evidence,transitions,problemStore,attemptStore,reportStore,json,commands,
-                hesitations,new StaticListableBeanFactory().getBeanProvider(KeyPointEvaluator.class));
+                comparisons,hesitations,new StaticListableBeanFactory().getBeanProvider(KeyPointEvaluator.class));
         var result=racing.publish(owner.id(),session,"loser");
         assertThat(result.reportId()).isEqualTo(reportService.get(owner.id(),session).reportId());
         assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_report WHERE session_id=?",Long.class,session)).isEqualTo(1);
