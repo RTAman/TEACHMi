@@ -112,6 +112,18 @@ class LearningTurnsApiTest {
             assertThat(state.path("initialAnswerId").asText()).isEqualTo(initial);
             version = state.path("version").asLong();
         }
+        // 통과된 wrapup 뒤에는 자동으로 넘어가지 않고 '설명 마치기'만 남는다.
+        var waiting = load();
+        assertThat(waiting.path("stage").asText()).isEqualTo("chat");
+        assertThat(waiting.path("availableActions")).hasSize(1);
+        assertThat(waiting.path("availableActions").get(0).asText()).isEqualTo("finish_explanation");
+        assertThat(waiting.path("finalExplanationId").isNull()).isTrue();
+        assertThat(waiting.path("messages").get(8).path("kind").asText()).isEqualTo("learning_complete");
+        assertThat(send("after-accept", "hint", null, version).getResponse().getStatus()).isEqualTo(409);
+        assertThat(finish("finish-stale", version - 1).getResponse().getStatus()).isEqualTo(409);
+
+        var finished = finish("finish", version);
+        assertThat(finished.getResponse().getStatus()).isEqualTo(200);
         var state = load();
         assertThat(state.path("stage").asText()).isEqualTo("problem");
         assertThat(state.path("availableActions").get(0).asText()).isEqualTo("start_problems");
@@ -121,7 +133,18 @@ class LearningTurnsApiTest {
         for (int i = 0; i < 9; i++) {
             assertThat(state.path("messages").get(i).path("sequence").asLong()).isEqualTo(i + 1);
         }
-        assertThat(send("after-complete", "hint", null, version).getResponse().getStatus()).isEqualTo(409);
+        assertThat(finish("finish", version).getResponse().getStatus()).as("같은 키 재전송").isEqualTo(200);
+        assertThat(body(finish("finish-again", state.path("version").asLong())).path("code").asText())
+                .isEqualTo("EXPLANATION_NOT_ACCEPTED");
+        assertThat(send("after-complete", "hint", null, state.path("version").asLong()).getResponse().getStatus())
+                .isEqualTo(409);
+    }
+
+    @Test void finishingBeforeTheWrapupIsAcceptedIsRejected() throws Exception {
+        var result = finish("too-early", 1);
+        assertThat(result.getResponse().getStatus()).isEqualTo(409);
+        assertThat(body(result).path("code").asText()).isEqualTo("EXPLANATION_NOT_ACCEPTED");
+        assertThat(load().path("stage").asText()).isEqualTo("chat");
     }
 
     @Test void insufficientAnswerStaysOnTheSameStageAndPreservesTheFirstAnswer() throws Exception {
@@ -334,6 +357,11 @@ class LearningTurnsApiTest {
         return mvc.perform(post(path()).principal(() -> "member-1").header("Idempotency-Key", key)
                 .contentType("application/json").content(json.writeValueAsString(new TurnRequest(kind, text, version))))
                 .andReturn();
+    }
+    private MvcResult finish(String key, long version) throws Exception {
+        return mvc.perform(post("/api/v1/sessions/" + id + "/explanation/finish").principal(() -> "member-1")
+                .header("Idempotency-Key", key).contentType("application/json")
+                .content(json.writeValueAsString(new FinishExplanationRequest(version)))).andReturn();
     }
     private JsonNode body(MvcResult result) throws Exception { return json.readTree(result.getResponse().getContentAsByteArray()); }
     private JsonNode load() throws Exception {

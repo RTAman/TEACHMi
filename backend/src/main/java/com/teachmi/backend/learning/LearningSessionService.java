@@ -102,6 +102,12 @@ public class LearningSessionService {
         return transition(memberId, sessionId, key, "chat/start", null, request.expectedVersion());
     }
 
+    /** AI가 wrapup을 통과시킨 뒤 학생이 '설명 마치기'를 누르면 최종 설명을 확정하고 problem 단계로 바꾼다. */
+    @Transactional
+    public SessionView finishExplanation(String memberId, UUID sessionId, String key, FinishExplanationRequest request) {
+        return transition(memberId, sessionId, key, "explanation/finish", null, request.expectedVersion());
+    }
+
     private SessionView transition(String memberId, UUID id, String key, String operation,
                                    String mode, long expectedVersion) {
         validateKey(key);
@@ -129,6 +135,12 @@ public class LearningSessionService {
                 saveOpeningQuestion(session, generator, context);
                 session.selectMode(mode, null);
             }
+        } else if (operation.equals("explanation/finish")) {
+            if (!session.awaitingFinish() || session.pendingTurnId != null) {
+                throw new LearningException(409, "EXPLANATION_NOT_ACCEPTED",
+                        "마지막 설명이 통과된 뒤에 설명을 마칠 수 있습니다.", view(session));
+            }
+            session.finishExplanation();
         } else {
             if (!"first".equals(session.mode)) {
                 throw conflict(session);
@@ -317,7 +329,8 @@ public class LearningSessionService {
         return switch (session.stage) {
             case "mode" -> List.of("select_mode");
             case "summary" -> List.of("start_chat");
-            case "chat" -> List.of("answer", "hint", "example", "dont_know");
+            case "chat" -> session.awaitingFinish() ? List.of("finish_explanation")
+                    : List.of("answer", "hint", "example", "dont_know");
             case "problem" -> returned == null ? List.of("start_problems") : List.of("retry_problem");
             case "report" -> List.of("view_report");
             default -> List.of();

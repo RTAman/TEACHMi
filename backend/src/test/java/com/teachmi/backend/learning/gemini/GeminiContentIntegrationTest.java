@@ -237,11 +237,12 @@ class GeminiContentIntegrationTest {
         String explanation="원가를 사용 기간에 나누어 비용으로 배분하고 기간별 수익에 대응시킵니다.";
         long version=sessions.get("u1",UUID.fromString(id)).version();
         var result=currentTurn("wrapup-final","answer",explanation);
-        assertThat(result.path("stage").asText()).isEqualTo("problem");
+        assertThat(result.path("stage").asText()).isEqualTo("chat");
         assertThat(result.path("status").asText()).isEqualTo("active");
         var user=result.path("messages").get(result.path("messages").size()-2);
         assertThat(user.path("text").asText()).isEqualTo(explanation);
-        assertThat(result.path("finalExplanationId")).isEqualTo(user.path("messageId"));
+        assertThat(result.path("finalExplanationId").isNull()).as("설명 마치기 전").isTrue();
+        assertThat(result.path("availableActions").get(0).asText()).isEqualTo("finish_explanation");
         var loaded=json.readTree(mvc.perform(get("/api/v1/sessions/"+id).principal(() -> "u1")).andReturn().getResponse().getContentAsByteArray());
         assertThat(loaded).isEqualTo(result);
         var rows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
@@ -256,6 +257,10 @@ class GeminiContentIntegrationTest {
         assertThat(policies.get(3).path("onAccepted").path("dialogueComplete").asBoolean()).isFalse();
         assertThat(policies.get(6).path("onAccepted").path("action").asText()).isEqualTo("ACKNOWLEDGE_DIALOGUE_AND_INVITE_PROBLEMS");
         verify(transport,times(8)).generate(anyString());
+        var finished=sessions.finishExplanation("u1",UUID.fromString(id),"finish",
+                new com.teachmi.backend.learning.FinishExplanationRequest(result.path("version").asLong()));
+        assertThat(finished.stage()).isEqualTo("problem");
+        assertThat(finished.finalExplanationId().toString()).isEqualTo(user.path("messageId").asText());
     }
 
     private String historicalKey(String version,String request) throws Exception {
@@ -291,10 +296,10 @@ class GeminiContentIntegrationTest {
         assertThat(assistant.path("kind").asText()).isEqualTo("learning_complete");
         assertThat(assistant.path("sourceChunkIds").get(0).asText()).isEqualTo("k01");
         assertThat(result.path("messages").size()).isEqualTo(9);
-        assertThat(result.path("stage").asText()).isEqualTo("problem");
+        assertThat(result.path("stage").asText()).isEqualTo("chat");
         assertThat(result.path("status").asText()).isEqualTo("active");
-        assertThat(result.path("availableActions").get(0).asText()).isEqualTo("start_problems");
-        assertThat(result.path("finalExplanationId")).isEqualTo(result.path("messages").get(7).path("messageId"));
+        assertThat(result.path("availableActions").get(0).asText()).isEqualTo("finish_explanation");
+        assertThat(result.path("finalExplanationId").isNull()).as("설명 마치기 전").isTrue();
         assertThat(result.path("messages").get(7).path("text").asText()).isEqualTo(explanation);
         String key=historicalKey("teachmi-dialogue-v5",requestJson.get());
         String payload=jdbc.queryForObject("SELECT content_json FROM teachmi.learning_ai_generation WHERE generation_key=?",String.class,key);

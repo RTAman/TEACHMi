@@ -104,6 +104,9 @@ class LearningAuthenticatedContractTest {
         state = write(post(path(id) + "/turns"), "help", Map.of("kind", "hint", "expectedVersion", state.path("version").asLong()), 200);
         for (int i = 0; i < 4; i++) state = write(post(path(id) + "/turns"), "answer-" + i,
                 Map.of("kind", "answer", "text", "원가를 사용 기간에 배분합니다.", "expectedVersion", state.path("version").asLong()), 200);
+        assertThat(state.path("availableActions").get(0).asText()).isEqualTo("finish_explanation");
+        state = write(post(path(id) + "/explanation/finish"), "finish",
+                Map.of("expectedVersion", state.path("version").asLong()), 200);
         assertThat(state.path("stage").asText()).isEqualTo("problem");
         var evidence = b(get(path(id) + "/evidence").cookie(member.cookie()), 200, true);
         assertThat(evidence.path("originalLearning").path("evidence").path("support").path("delivered").path("hint").asInt()).isEqualTo(1);

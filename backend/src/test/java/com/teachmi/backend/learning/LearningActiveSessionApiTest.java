@@ -233,6 +233,9 @@ class LearningActiveSessionApiTest {
         for (int i = 0; i < 4; i++) {
             turns.send("member-1", id, prefix + i, new TurnRequest("answer", "의미와 이유를 설명합니다.", version(id)));
         }
+        // 처음 학습만 '설명 마치기'가 필요하다. 재설명은 통과 즉시 같은 문제로 돌아간다.
+        if (sessions.get("member-1", id).availableActions().contains("finish_explanation"))
+            sessions.finishExplanation("member-1", id, prefix + "finish", new FinishExplanationRequest(version(id)));
     }
     private MvcResult active(String member) throws Exception {
         return mvc.perform(get("/api/v1/sessions/active").principal(() -> member)).andReturn();

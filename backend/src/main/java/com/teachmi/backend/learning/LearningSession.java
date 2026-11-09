@@ -36,6 +36,8 @@ class LearningSession {
     @Column UUID pendingTurnId;
     @Column UUID initialAnswerId;
     @Column UUID finalExplanationId;
+    /** AI가 통과시킨 처음 학습의 wrapup 답변. '설명 마치기'를 누르면 finalExplanationId가 된다. */
+    @Column UUID explanationAcceptedId;
     @Column UUID activeReteachId;
     @Column UUID returnReteachId;
     @Version
@@ -88,11 +90,23 @@ class LearningSession {
             case "concept" -> chatStage = "reason";
             case "reason" -> chatStage = "wrapup";
             case "wrapup" -> {
-                stage = "problem";
-                if (activeReteachId == null) finalExplanationId = messageId;
+                // 재설명은 같은 문제로 바로 돌아간다. 처음 학습은 학생이 '설명 마치기'를 눌러야 넘어간다.
+                if (activeReteachId == null) explanationAcceptedId = messageId;
+                else stage = "problem";
             }
             default -> throw new IllegalStateException("Invalid conversation stage");
         }
+    }
+
+    boolean awaitingFinish() {
+        return stage.equals("chat") && activeReteachId == null && explanationAcceptedId != null;
+    }
+
+    void finishExplanation() {
+        stage = "problem";
+        finalExplanationId = explanationAcceptedId;
+        explanationAcceptedId = null;
+        touch();
     }
 
     void touch() {

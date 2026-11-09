@@ -448,6 +448,116 @@
         }
       }
     },
+    "/api/v1/sessions/{sessionId}/explanation/finish": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "finishExplanation",
+        "summary": "설명 마치기 버튼으로 응용문제 단계로 이동",
+        "description": "AI 호출 없음. 처음 학습의 wrapup 답변이 통과되면 서버는 자동으로 넘어가지 않고 availableActions=[finish_explanation]을 반환한다. 이 요청이 통과된 답변을 finalExplanationId로 확정하고 stage를 problem으로 바꾼다. 통과 전이면 409 EXPLANATION_NOT_ACCEPTED. 재설명은 기존처럼 통과 즉시 같은 문제로 복귀.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishExplanationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "stage=problem인 SessionView 또는 같은 키의 과거 성공 응답.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/hesitations": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SessionId"
+        }
+      ],
+      "post": {
+        "operationId": "recordHesitation",
+        "summary": "질문에서 30초 이상 망설임 기록",
+        "description": "AI 호출 없음. 질문(kind가 _question으로 끝나는 assistant 메시지)이 뜬 뒤 30초 이상 입력이 없으면 질문당 한 번 보냄. 같은 질문의 재전송도 204이며 한 번만 셈. 학습 version을 바꾸지 않으므로 다음 turns의 expectedVersion은 그대로 사용. stage=chat인 진행 중 학습에서만 허용(그 외 409 HESITATION_NOT_ALLOWED). 질문이 아닌 메시지는 422 INVALID_HESITATION_TARGET.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HesitationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "기록됨(이미 기록된 질문 포함)."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/CsrfForbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/InvalidRequest"
+          }
+        }
+      }
+    },
     "/api/v1/sessions/{sessionId}/evidence": {
       "parameters": [
         {
@@ -872,6 +982,41 @@
           }
         ],
         "description": "answer는 공백·NUL이 아닌 1~4000자 text 필요. 도움은 text 생략 또는 null. 재시도는 원래 키·본문·expectedVersion 그대로."
+      },
+      "FinishExplanationRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "expectedVersion"
+        ],
+        "properties": {
+          "expectedVersion": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HesitationRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "targetMessageId",
+          "waitedSeconds"
+        ],
+        "properties": {
+          "targetMessageId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "학생이 답하지 못하고 있던 AI 질문 메시지 ID"
+          },
+          "waitedSeconds": {
+            "type": "integer",
+            "minimum": 30,
+            "maximum": 86400,
+            "description": "질문이 뜬 뒤 입력 없이 기다린 시간(초)"
+          }
+        }
       },
       "StartReteachRequest": {
         "type": "object",
@@ -1423,6 +1568,7 @@
                 "wait",
                 "retry_turn",
                 "retry_reteach",
+                "finish_explanation",
                 "start_problems",
                 "retry_problem",
                 "view_report"
@@ -2134,6 +2280,7 @@
                 "wait",
                 "retry_turn",
                 "retry_reteach",
+                "finish_explanation",
                 "start_problems",
                 "retry_problem",
                 "view_report"

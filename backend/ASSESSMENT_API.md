@@ -104,6 +104,37 @@ GET은 저장된 리포트를 조회합니다. POST /report/confirm은 학생의
 새 C 명령은 같은 기존 요청 이력 테이블을 쓰되 작업 구분 지문과 C 응답을 저장합니다. 기존 B 응답·기존 행은 변경하지 않습니다.
 V10은 리포트 테이블만 추가하며 V1~V9 SQL을 수정하지 않습니다.
 
+### 핵심 요소·대화 흐름·망설임
+
+리포트 응답에 `keyPoints`와 `flow`가 추가됐습니다. 이 필드가 생기기 전에 저장된 리포트는 두 값이 `null`입니다.
+
+```json
+"keyPoints": {
+  "total": 3, "initialCount": 1, "finalCount": 3,
+  "items": [{"point": "원가 배분", "inInitial": true, "inFinal": true},
+            {"point": "내용연수", "inInitial": false, "inFinal": true}]
+},
+"flow": {
+  "hesitationCount": 2,
+  "points": [{"index": 1, "chatStage": "case", "stageLevel": 1, "action": "hint",
+              "accepted": null, "secondsFromStart": 40, "hesitated": true}]
+}
+```
+
+- **keyPoints (혼자 말한 핵심 요소 수)**: 리포트를 만들 때 Gemini가 원문을 근거로 핵심 요소 2~5개를 고르고, 첫 설명(`initialAnswer`)과 최종 설명(`finalExplanation`)에 각각 들어갔는지 판정합니다. 화면의 "1 → 3개"는 `initialCount → finalCount`입니다. 공통 포트의 `assessment/report-key-points` v1 작업이며, 같은 학습을 다시 판정하면 저장된 결과를 다시 씁니다. Gemini가 꺼져 있거나 판정에 실패하면 `null`이고, 리포트는 그대로 만들어집니다.
+- **flow (대화 흐름 그래프)**: 처음 학습 대화에서 학생의 답변·도움 요청 하나가 점 하나입니다. 재설명 대화는 넣지 않습니다. `stageLevel`은 case=1, concept=2, reason=3, wrapup=4입니다. `action`은 answer·hint·example·dont_know이며, `accepted`는 answer가 그 단계를 통과했는지(도움 요청은 null)입니다. x축은 `index` 또는 `secondsFromStart`(첫 질문부터 걸린 초)를 쓰세요.
+- **hesitationCount (30초 망설임 횟수)**: 프론트엔드가 질문이 뜬 뒤 30초 이상 입력이 없을 때 아래 API로 보낸 질문 수입니다. `hesitated`는 그 행동 직전 질문에서 망설였는지입니다.
+
+```http
+POST /api/v1/sessions/{sessionId}/hesitations
+X-CSRF-Token: ...
+Content-Type: application/json
+
+{"targetMessageId": "질문 메시지 UUID", "waitedSeconds": 30}
+```
+
+질문(kind가 `_question`으로 끝나는 assistant 메시지)마다 한 번만 보내면 됩니다. 같은 질문을 다시 보내도 204이고 한 번만 셉니다. 학습 version을 바꾸지 않으므로 다음 답변 전송의 `expectedVersion`은 그대로 씁니다. Idempotency-Key는 필요 없습니다. `stage=chat`인 진행 중 학습에서만 받으며(그 외 409 `HESITATION_NOT_ALLOWED`), 질문이 아닌 메시지는 422 `INVALID_HESITATION_TARGET`입니다. V13은 망설임 테이블만 추가합니다.
+
 ## 홈·재학습
 
 GET /api/v1/home은 현재 회원의 진행 중 학습 한 건과 최근 리포트 다섯 건을 반환합니다.

@@ -336,12 +336,15 @@ class LearningAssessmentServiceTest {
         assertThat(current()).isEqualTo(original);
         assertThat(reportCount()).isZero();
         assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_session_request WHERE request_key NOT IN "
-                + "('create','mode','normal0','normal1','normal2','normal3')", Long.class)).isZero();
+                + "('create','mode','normal0','normal1','normal2','normal3','normalfinish')", Long.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT assessment_report_snapshot FROM teachmi.learning_session WHERE id=?", String.class, id)).isNull();
     }
     private void finish(String prefix) {
         for (int i = 0; i < 4; i++) turns.send("member-1", id, prefix + i,
                 new TurnRequest("answer", "의미와 이유를 설명합니다.", current().version()));
+        // 처음 학습만 '설명 마치기'가 필요하다. 재설명은 통과 즉시 같은 문제로 돌아간다.
+        if (current().availableActions().contains("finish_explanation"))
+            sessions.finishExplanation("member-1", id, prefix + "finish", new FinishExplanationRequest(current().version()));
     }
     private void expect(String code, ThrowingCallable call) {
         assertThatThrownBy(call).isInstanceOfSatisfying(LearningException.class, ex -> assertThat(ex.code()).isEqualTo(code));

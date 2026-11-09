@@ -109,6 +109,9 @@ class LearningReteachApiTest {
             assertThat(turn("normal-" + i, "answer", "최초 학습 설명", load().path("version").asLong())
                     .getResponse().getStatus()).isEqualTo(200);
         }
+        assertThat(mvc.perform(post("/api/v1/sessions/" + id + "/explanation/finish").principal(() -> "member-1")
+                .header("Idempotency-Key", "finish").contentType("application/json")
+                .content("{\"expectedVersion\":" + version() + "}")).andReturn().getResponse().getStatus()).isEqualTo(200);
         original = load();
         assertThat(original.path("stage").asText()).isEqualTo("problem");
         problems.session = UUID.fromString(id);

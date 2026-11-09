@@ -32,9 +32,9 @@ Content-Type: application/json
 | case | concept 질문 | case에서 보충 |
 | concept | reason 질문 | concept에서 보충 |
 | reason | wrapup 설명 요청 | reason에서 보충 |
-| wrapup | stage를 problem으로 변경 | wrapup에서 보충 |
+| wrapup | 처음 학습: `finish_explanation` 대기(설명 마치기 버튼). 재설명: stage를 problem으로 변경 | wrapup에서 보충 |
 
-모델은 현재 단계의 충분 여부와 응답만 제공합니다. 서버는 위 순서로 한 단계씩 이동합니다. wrapup이 충분하면 C의 문제 생성에 사용할 `start_problems` 행동을 반환합니다. C는 이 상태에서 독립 문항을 생성합니다. 문제 풀이·리포트 단계의 새로운 전송은 409로 거절됩니다. 성공한 과거 전송의 재시도는 저장된 성공 응답을 반환합니다.
+모델은 현재 단계의 충분 여부와 응답만 제공합니다. 서버는 위 순서로 한 단계씩 이동합니다. 처음 학습의 wrapup이 충분하면 자동으로 넘어가지 않고 `availableActions=["finish_explanation"]`을 반환합니다. 학생이 설명 마치기 버튼을 누르면 `POST /api/v1/sessions/{id}/explanation/finish`(Idempotency-Key, `{"expectedVersion":현재 version}`)를 보내고, 서버가 그 답변을 `finalExplanationId`로 확정하고 stage를 problem으로 바꾼 뒤 C의 문제 생성에 사용할 `start_problems` 행동을 반환합니다. 통과 전에 보내면 409 `EXPLANATION_NOT_ACCEPTED`이고, 대기 중의 새 답변·도움 전송은 409입니다. C는 이 상태에서 독립 문항을 생성합니다. 문제 풀이·리포트 단계의 새로운 전송은 409로 거절됩니다. 성공한 과거 전송의 재시도는 저장된 성공 응답을 반환합니다.
 
 AI 텍스트의 “완료” 표현을 상태 판정에 사용하지 마세요. `stage=chat, chatStage=wrapup`이면 사용자의 최종 설명이 남아 있으며, B의 대화 완료는 `stage=problem`과 저장된 `finalExplanationId`로 확인합니다. 재설명은 기존 `problemReturn`과 `availableActions`에 따라 같은 문제로 돌아갑니다. 이 시점에도 학습의 status는 active이며 문제 풀이·리포트 확인이 남아 있습니다. 전체 학습 완료는 기존 리포트 확정 흐름의 `status=completed`로 판단합니다.
 

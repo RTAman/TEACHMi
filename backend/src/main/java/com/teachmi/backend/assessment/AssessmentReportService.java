@@ -9,6 +9,8 @@ import com.teachmi.backend.assessment.ReportViews.Application;
 import com.teachmi.backend.assessment.ReportViews.AttemptResult;
 import com.teachmi.backend.assessment.ReportViews.Concept;
 import com.teachmi.backend.assessment.ReportViews.Explanation;
+import com.teachmi.backend.assessment.ReportViews.Flow;
+import com.teachmi.backend.assessment.ReportViews.KeyPoints;
 import com.teachmi.backend.assessment.ReportViews.NextStep;
 import com.teachmi.backend.assessment.ReportViews.ProblemResult;
 import com.teachmi.backend.assessment.ReportViews.Quote;
@@ -20,9 +22,14 @@ import com.teachmi.backend.learning.LearningAssessmentService;
 import com.teachmi.backend.learning.LearningEvidenceService;
 import com.teachmi.backend.learning.LearningEvidenceView;
 import com.teachmi.backend.learning.LearningException;
+import com.teachmi.backend.learning.LearningHesitationService;
 import com.teachmi.backend.learning.LearningMessageView;
 import com.teachmi.backend.learning.LearningSessionService;
 import com.teachmi.backend.learning.LearningCommands;
+import com.teachmi.backend.learning.SessionView;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
@@ -32,6 +39,7 @@ import tools.jackson.databind.ObjectMapper;
  */
 @Service
 class AssessmentReportService {
+    private static final Logger log = LoggerFactory.getLogger(AssessmentReportService.class);
     private final LearningSessionService sessions;
     private final LearningEvidenceService evidence;
     private final LearningAssessmentService transitions;
@@ -40,11 +48,14 @@ class AssessmentReportService {
     private final AssessmentReportRepository reports;
     private final ObjectMapper json;
     private final LearningCommands commands;
+    private final LearningHesitationService hesitations;
+    private final ObjectProvider<KeyPointEvaluator> keyPointEvaluators;
 
     AssessmentReportService(LearningSessionService sessions, LearningEvidenceService evidence,
                             LearningAssessmentService transitions, AssessmentProblemRepository problems,
                             AssessmentAttemptRepository attempts, AssessmentReportRepository reports, ObjectMapper json,
-                            LearningCommands commands) {
+                            LearningCommands commands, LearningHesitationService hesitations,
+                            ObjectProvider<KeyPointEvaluator> keyPointEvaluators) {
         this.sessions = sessions;
         this.evidence = evidence;
         this.transitions = transitions;
@@ -53,6 +64,8 @@ class AssessmentReportService {
         this.reports = reports;
         this.json = json;
         this.commands = commands;
+        this.hesitations = hesitations;
+        this.keyPointEvaluators = keyPointEvaluators;
     }
 
     /** 모든 문항을 마친 학습의 리포트를 한 번만 만든다. 이미 있으면 저장된 리포트를 그대로 돌려준다. */
@@ -99,7 +112,12 @@ class AssessmentReportService {
         if (saved.stream().anyMatch(problem -> problem.evidenceVersion != snapshot.version())) {
             throw stale();
         }
-        var content = build(snapshot, saved, histories);
+        // 처음 학습 대화는 problem 단계부터 바뀌지 않으므로 근거 스냅샷과 따로 읽어도 같은 내용이다.
+        var state = sessions.get(memberId, sessionId);
+        var original = snapshot.originalLearning().evidence();
+        var content = build(snapshot, saved, histories,
+                keyPoints(memberId, state, original.initialAnswer(), original.finalExplanation()),
+                ReportFlow.of(state.messages(), hesitations.targetMessageIds(sessionId)));
         return new AssessmentReport(sessionId, memberId, snapshot.version(), json.writeValueAsString(content));
     }
 
@@ -125,8 +143,21 @@ class AssessmentReportService {
         });
     }
 
+    /** AI 판정은 리포트의 부가 정보다. 연결되지 않았거나 실패하면 null로 두고 리포트는 그대로 만든다. */
+    private KeyPoints keyPoints(String memberId, SessionView state, LearningMessageView initial,
+                                LearningMessageView last) {
+        var evaluator = keyPointEvaluators.getIfAvailable();
+        if (evaluator == null || initial == null || last == null) return null;
+        try {
+            return evaluator.evaluate(new KeyPointEvaluator.Input(memberId, state, initial.text(), last.text()));
+        } catch (RuntimeException failure) {
+            log.warn("Key point evaluation skipped for report: {}", failure.getClass().getSimpleName());
+            return null;
+        }
+    }
+
     private ReportContent build(LearningEvidenceView snapshot, List<AssessmentProblem> saved,
-                                List<List<AssessmentAttempt>> histories) {
+                                List<List<AssessmentAttempt>> histories, KeyPoints keyPoints, Flow flow) {
         var original = snapshot.originalLearning().evidence();
         var delivered = original.support().delivered();
         var explanation = new Explanation(delivered.total() == 0 ? "independent" : "with_support",
@@ -155,14 +186,15 @@ class AssessmentReportService {
         var application = new Application(independent.independentCorrect(), independent.total(),
                 independent.pendingReview(), results);
         return new ReportContent(snapshot.schemaVersion(),
-                new Concept(snapshot.concept().name(), snapshot.concept().scope()), explanation, application, nextSteps);
+                new Concept(snapshot.concept().name(), snapshot.concept().scope()), explanation, application, nextSteps,
+                keyPoints, flow);
     }
 
     private ReportView view(AssessmentReport report) {
         var content = json.readValue(report.content, ReportContent.class);
         return new ReportView(report.id, report.sessionId, report.confirmedAt == null ? "ready" : "confirmed",
                 report.createdAt, report.confirmedAt, content.concept(), content.explanation(),
-                content.application(), content.nextSteps());
+                content.application(), content.nextSteps(), content.keyPoints(), content.flow());
     }
 
     private static Quote quote(LearningMessageView message) {
