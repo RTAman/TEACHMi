@@ -17,14 +17,17 @@ class LearningSessionController {
     private final LearningTurnService turns;
     private final LearningReteachService reteach;
     private final LearningEvidenceService evidence;
+    private final LearningHesitationService hesitations;
 
     LearningSessionController(LearningSessionService sessions, ObjectProvider<CurrentMember> members,
-                              LearningTurnService turns, LearningReteachService reteach, LearningEvidenceService evidence) {
+                              LearningTurnService turns, LearningReteachService reteach, LearningEvidenceService evidence,
+                              LearningHesitationService hesitations) {
         this.sessions = sessions;
         this.members = members;
         this.turns = turns;
         this.reteach = reteach;
         this.evidence = evidence;
+        this.hesitations = hesitations;
     }
 
     @PostMapping
@@ -58,6 +61,22 @@ class LearningSessionController {
             @RequestHeader(value = "Idempotency-Key", required = false) String key,
             @Valid @RequestBody TurnRequest request) {
         return turns.send(requireMemberId(http), sessionId, key, request);
+    }
+
+    /** availableActions에 finish_explanation이 있을 때 '설명 마치기' 버튼으로 호출한다. */
+    @PostMapping("/{sessionId}/explanation/finish")
+    SessionView finishExplanation(HttpServletRequest http, @PathVariable UUID sessionId,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key,
+            @Valid @RequestBody FinishExplanationRequest request) {
+        return sessions.finishExplanation(requireMemberId(http), sessionId, key, request);
+    }
+
+    /** 질문이 뜬 뒤 30초 이상 입력이 없으면 프론트엔드가 질문당 한 번 보낸다. 같은 질문의 재전송도 204다. */
+    @PostMapping("/{sessionId}/hesitations")
+    ResponseEntity<Void> hesitation(HttpServletRequest http, @PathVariable UUID sessionId,
+            @Valid @RequestBody HesitationRequest request) {
+        hesitations.record(requireMemberId(http), sessionId, request);
+        return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{sessionId}/reteach")

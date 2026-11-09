@@ -46,6 +46,8 @@ public class LearningTurnTransactions {
         if (!session.status.equals("active") || !session.stage.equals("chat")) throw access.conflict(session);
         reteach.verifyActive(session);
         var existing = pending(member, key);
+        // 통과된 마지막 설명 뒤에는 '설명 마치기'만 남는다. 진행 중이던 같은 전송의 재시도는 아래에서 처리한다.
+        if (existing == null && session.awaitingFinish()) throw access.conflict(session);
         if (existing != null) {
             if (!existing.id().equals(session.pendingTurnId) || existing.inputVersion() != session.version) {
                 throw access.conflict(session);
@@ -129,7 +131,8 @@ public class LearningTurnTransactions {
         String kind = turn.kind();
         if (kind.equals("answer")) {
             if (!reply.accepted()) kind = "followup_question";
-            else if (session.stage.equals("problem")) kind = turn.reteachId() == null ? "learning_complete" : "reteach_complete";
+            else if (session.stage.equals("problem") || session.awaitingFinish())
+                kind = turn.reteachId() == null ? "learning_complete" : "reteach_complete";
             else if (session.chatStage.equals("wrapup")) kind = "wrapup_question";
             else kind = "stage_question";
         }

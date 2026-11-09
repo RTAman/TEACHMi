@@ -70,6 +70,7 @@ class AssessmentReportApiTest {
     @Autowired LearningAssessmentService transitions;
     @Autowired LearningCommands commands;
     @Autowired ReportComparisons comparisons;
+    @Autowired com.teachmi.backend.learning.LearningHesitationService hesitations;
     MockMvc mvc;
     Login owner;
     UUID session, first, second;
@@ -179,6 +180,40 @@ class AssessmentReportApiTest {
         jdbc.update("UPDATE teachmi.learning_session SET version=version+1 WHERE id=?", session);
         code(publish(owner, "p1"), 409, "ASSESSMENT_EVIDENCE_STALE");
         assertThat(stage()).isEqualTo("problem");
+    }
+
+    @Test
+    void hesitationsAreRecordedOncePerQuestionAndCountedInTheReportFlow() throws Exception {
+        var question = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO teachmi.learning_message
+                (id,session_id,sequence,role,kind,chat_stage,text,source_chunk_ids,created_at)
+                VALUES (?,?,3,'assistant','stage_question','wrapup','다시 설명해 볼래요?','[]',now())
+                """, question, session);
+        code(hesitate(owner, question), 409, "HESITATION_NOT_ALLOWED");
+
+        jdbc.update("UPDATE teachmi.learning_session SET stage='chat' WHERE id=?", session);
+        var userMessage = jdbc.queryForObject(
+                "SELECT id FROM teachmi.learning_message WHERE session_id=? AND sequence=1", UUID.class, session);
+        code(hesitate(owner, userMessage), 422, "INVALID_HESITATION_TARGET");
+        assertThat(hesitate(login(), question).getStatus()).as("다른 회원").isEqualTo(404);
+        assertThat(hesitate(owner, question).getStatus()).isEqualTo(204);
+        assertThat(hesitate(owner, question).getStatus()).as("같은 질문 재전송").isEqualTo(204);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_hesitation WHERE session_id=?",
+                Long.class, session)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT version FROM teachmi.learning_session WHERE id=?", Long.class, session))
+                .as("입력 중 전송이 expectedVersion을 바꾸지 않는다").isEqualTo(7);
+        jdbc.update("UPDATE teachmi.learning_session SET stage='problem' WHERE id=?", session);
+
+        finishCorrectly();
+        var data = body(publish(owner, "p1"));
+        assertThat(data.path("flow").path("hesitationCount").asInt()).isEqualTo(1);
+        var points = data.path("flow").path("points");
+        assertThat(points.size()).isEqualTo(2);
+        assertThat(points.get(0).path("chatStage").asText()).isEqualTo("case");
+        assertThat(points.get(0).path("stageLevel").asInt()).isEqualTo(1);
+        assertThat(points.get(1).path("stageLevel").asInt()).isEqualTo(4);
+        assertThat(data.path("keyPoints").isNull()).as("테스트에서는 AI 판정이 꺼져 있다").isTrue();
     }
 
     @Test
@@ -325,7 +360,8 @@ class AssessmentReportApiTest {
                 return super.get(member,id);
             }
         };
-        var racing=new AssessmentReportService(sessions,evidence,transitions,problemStore,attemptStore,reportStore,json,commands,comparisons);
+        var racing=new AssessmentReportService(sessions,evidence,transitions,problemStore,attemptStore,reportStore,json,commands,
+                comparisons,hesitations,new StaticListableBeanFactory().getBeanProvider(KeyPointEvaluator.class));
         var result=racing.publish(owner.id(),session,"loser");
         assertThat(result.reportId()).isEqualTo(reportService.get(owner.id(),session).reportId());
         assertThat(jdbc.queryForObject("SELECT count(*) FROM teachmi.assessment_report WHERE session_id=?",Long.class,session)).isEqualTo(1);
@@ -455,6 +491,13 @@ class AssessmentReportApiTest {
     private MockHttpServletResponse publish(Login member, String key) throws Exception {
         return mvc.perform(post(path() + "/report").cookie(member.cookie()).header("X-CSRF-Token", member.csrf())
                 .header("Idempotency-Key", key)).andReturn().getResponse();
+    }
+
+    private MockHttpServletResponse hesitate(Login member, UUID question) throws Exception {
+        return mvc.perform(post(path() + "/hesitations").cookie(member.cookie()).header("X-CSRF-Token", member.csrf())
+                .contentType("application/json").content(json.writeValueAsString(
+                        Map.of("targetMessageId", question.toString(), "waitedSeconds", 31))))
+                .andReturn().getResponse();
     }
 
     private MockHttpServletResponse confirm(Login member, String key) throws Exception {

@@ -10,7 +10,31 @@ final class ReportViews {
 
     /** DB에 저장하는 리포트 본문. 한 번 저장한 뒤에는 바꾸지 않는다. */
     record ReportContent(int evidenceSchemaVersion, Concept concept, Explanation explanation,
-                         Application application, List<NextStep> nextSteps) {}
+                         Application application, List<NextStep> nextSteps, KeyPoints keyPoints, Flow flow) {}
+    // keyPoints·flow가 생기기 전에 저장한 리포트는 두 값이 null로 읽힌다.
+
+    /**
+     * 학생 설명에 들어간 개념의 핵심 요소. AI가 원문을 근거로 판정한다.
+     * initialCount는 첫 설명, finalCount는 최종 설명에 들어간 요소 수다(예: 1 → 3개).
+     * AI가 연결되지 않았거나 판정에 실패하면 리포트에서 null이다.
+     */
+    record KeyPoints(int total, int initialCount, int finalCount, List<KeyPoint> items) {}
+
+    record KeyPoint(String point, boolean inInitial, boolean inFinal) {}
+
+    /**
+     * 처음 학습 대화의 흐름. 학생의 답변·도움 요청 하나가 점 하나다(재설명 대화는 넣지 않는다).
+     * hesitationCount는 30초 이상 입력이 없었던 질문 수다.
+     */
+    record Flow(int hesitationCount, List<FlowPoint> points) {}
+
+    /**
+     * stageLevel은 case=1, concept=2, reason=3, wrapup=4다. action은 answer·hint·example·dont_know다.
+     * accepted는 answer가 그 단계를 통과했는지이며, 도움 요청은 null이다.
+     * hesitated는 이 행동 직전 질문에서 30초 이상 망설였는지다.
+     */
+    record FlowPoint(int index, String chatStage, int stageLevel, String action, Boolean accepted,
+                     long secondsFromStart, boolean hesitated) {}
 
     record Concept(String name, String scope) {}
 
@@ -52,5 +76,5 @@ final class ReportViews {
      */
     record ReportView(UUID reportId, UUID sessionId, String status, Instant createdAt, Instant confirmedAt,
                       Concept concept, Explanation explanation, Application application, List<NextStep> nextSteps,
-                      Comparison comparison) {}
+                      KeyPoints keyPoints, Flow flow, Comparison comparison) {}
 }

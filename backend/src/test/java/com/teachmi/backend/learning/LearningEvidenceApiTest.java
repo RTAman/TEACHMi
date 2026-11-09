@@ -107,6 +107,8 @@ class LearningEvidenceApiTest {
         send("concept", "answer", "뜻을 설명합니다.");
         send("reason", "answer", "이유를 설명합니다.");
         send("final", "answer", "최종 설명: 원가를 사용 기간에 배분해 기간별 비용을 대응합니다.");
+        assertThat(evidence().path("originalLearning").path("state").asText()).as("설명 마치기 전").isEqualTo("in_progress");
+        finishIfWaiting("original");
         var result = evidence();
         assertThat(result.path("status").asText()).isEqualTo("active");
         assertThat(result.path("stage").asText()).isEqualTo("problem");
@@ -160,6 +162,7 @@ class LearningEvidenceApiTest {
         assertThat(original(pending).path("finalExplanation").isNull()).isTrue();
         dialogue.fail = false;
         assertThat(turn("final", "answer", "완료 전 설명", version).getResponse().getStatus()).isEqualTo(200);
+        finishIfWaiting("original");
         assertThat(evidence().path("originalLearning").path("state").asText()).isEqualTo("completed");
     }
 
@@ -330,6 +333,17 @@ class LearningEvidenceApiTest {
     private void completeOriginal() throws Exception { mode("review"); finish("normal"); }
     private void finish(String prefix) throws Exception {
         for (int i = 0; i < 4; i++) send(prefix + i, "answer", "의미와 이유를 설명합니다.");
+        finishIfWaiting(prefix);
+    }
+    /** 처음 학습은 '설명 마치기'를 눌러야 problem으로 넘어간다. 재설명은 통과 즉시 돌아가므로 누르지 않는다. */
+    private void finishIfWaiting(String prefix) throws Exception {
+        var state = json.readTree(mvc.perform(get("/api/v1/sessions/" + id).principal(() -> "member-1"))
+                .andReturn().getResponse().getContentAsByteArray());
+        if (!state.path("availableActions").path(0).asText().equals("finish_explanation")) return;
+        assertThat(mvc.perform(post("/api/v1/sessions/" + id + "/explanation/finish").principal(() -> "member-1")
+                .header("Idempotency-Key", prefix + "finish").contentType("application/json")
+                .content(json.writeValueAsString(new FinishExplanationRequest(version())))).andReturn()
+                .getResponse().getStatus()).isEqualTo(200);
     }
     private void send(String key, String kind, String text) throws Exception {
         assertThat(turn(key, kind, text, version()).getResponse().getStatus()).isEqualTo(200);

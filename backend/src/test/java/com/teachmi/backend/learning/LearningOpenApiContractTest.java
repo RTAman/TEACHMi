@@ -95,7 +95,7 @@ class LearningOpenApiContractTest {
                         .forEach(verb -> implemented.add(verb.name() + " " + path)));
             }
         });
-        assertThat(documented).hasSize(8).isEqualTo(implemented);
+        assertThat(documented).hasSize(10).isEqualTo(implemented);
         var schemas = json.readTree(Files.readString(SPEC)).path("components").path("schemas");
         Map<String, Class<?>> records = Map.ofEntries(
                 Map.entry("SessionView", SessionView.class), Map.entry("LearningMessage", LearningMessageView.class),
@@ -110,7 +110,9 @@ class LearningOpenApiContractTest {
                 Map.entry("GenerationRecovery", GenerationRecovery.class),
                 Map.entry("CreateSessionRequest", CreateSessionRequest.class), Map.entry("ChooseModeRequest", ChooseModeRequest.class),
                 Map.entry("StartChatRequest", StartChatRequest.class), Map.entry("TurnRequest", TurnRequest.class),
-                Map.entry("StartReteachRequest", StartReteachRequest.class));
+                Map.entry("StartReteachRequest", StartReteachRequest.class),
+                Map.entry("HesitationRequest", HesitationRequest.class),
+                Map.entry("FinishExplanationRequest", FinishExplanationRequest.class));
         records.forEach((name, type) -> assertThat(schemas.path(name).path("properties").propertyNames())
                 .as("%s fields", name).containsExactlyInAnyOrderElementsOf(Arrays.stream(type.getRecordComponents())
                         .map(component -> component.getName()).toList()));
@@ -127,6 +129,7 @@ class LearningOpenApiContractTest {
         write(post(path(id) + "/chat/start"), "start", Map.of("expectedVersion", version(id)), 200, true);
         for (String kind : List.of("hint", "example", "dont_know")) turn(id, kind, kind, null);
         for (int i = 0; i < 4; i++) turn(id, "answer-" + i, "answer", "선택한 개념의 의미와 이유를 설명합니다.");
+        write(post(path(id) + "/explanation/finish"), "finish", Map.of("expectedVersion", version(id)), 200, true);
         var evidence = exchange(get(path(id) + "/evidence").principal(() -> "member-1"), 200, true);
         assertThat(evidence.path("originalLearning").path("state").asText()).isEqualTo("completed");
         assertThat(evidence.path("originalLearning").path("evidence").path("support").path("delivered").path("total").asInt()).isEqualTo(3);
@@ -143,6 +146,7 @@ class LearningOpenApiContractTest {
         String id = create().path("sessionId").asText();
         write(put(path(id) + "/mode"), "mode", Map.of("mode", "review", "expectedVersion", version(id)), 200, true);
         for (int i = 0; i < 4; i++) turn(id, "normal" + i, "answer", "최초 설명");
+        write(post(path(id) + "/explanation/finish"), "finish", Map.of("expectedVersion", version(id)), 200, true);
         problems.session = UUID.fromString(id);
         write(post(path(id) + "/reteach"), "reteach", Map.of("problemId", "p01", "attemptId", "a01", "expectedVersion", version(id)), 200, true);
         turn(id, "help", "hint", null);
@@ -167,6 +171,7 @@ class LearningOpenApiContractTest {
         read(id);
         write(post(path(id) + "/turns"), "pending", request, 200, true);
         for (int i = 0; i < 3; i++) turn(id, "rest" + i, "answer", "설명을 마칩니다.");
+        write(post(path(id) + "/explanation/finish"), "finish", Map.of("expectedVersion", version(id)), 200, true);
         problems.session = UUID.fromString(id);
         var openingClaim = reteachTransactions.begin("member-1", UUID.fromString(id), "pending-reteach", new StartReteachRequest("p01", "a01", version(id)));
         read(id);
