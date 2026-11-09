@@ -40,11 +40,12 @@ class AssessmentReportService {
     private final AssessmentReportRepository reports;
     private final ObjectMapper json;
     private final LearningCommands commands;
+    private final ReportComparisons comparisons;
 
     AssessmentReportService(LearningSessionService sessions, LearningEvidenceService evidence,
                             LearningAssessmentService transitions, AssessmentProblemRepository problems,
                             AssessmentAttemptRepository attempts, AssessmentReportRepository reports, ObjectMapper json,
-                            LearningCommands commands) {
+                            LearningCommands commands, ReportComparisons comparisons) {
         this.sessions = sessions;
         this.evidence = evidence;
         this.transitions = transitions;
@@ -53,6 +54,7 @@ class AssessmentReportService {
         this.reports = reports;
         this.json = json;
         this.commands = commands;
+        this.comparisons = comparisons;
     }
 
     /** 모든 문항을 마친 학습의 리포트를 한 번만 만든다. 이미 있으면 저장된 리포트를 그대로 돌려준다. */
@@ -162,7 +164,8 @@ class AssessmentReportService {
         var content = json.readValue(report.content, ReportContent.class);
         return new ReportView(report.id, report.sessionId, report.confirmedAt == null ? "ready" : "confirmed",
                 report.createdAt, report.confirmedAt, content.concept(), content.explanation(),
-                content.application(), content.nextSteps());
+                content.application(), content.nextSteps(),
+                comparisons.of(report.memberId, report.sessionId, content));
     }
 
     private static Quote quote(LearningMessageView message) {
