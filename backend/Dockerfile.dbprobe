@@ -1,0 +1,3 @@
+FROM postgres:17-alpine
+
+CMD ["sh", "-c", "echo DB_PROBE_START; if nc -z -w 5 aws-0-ap-southeast-1.pooler.supabase.com 5432; then echo DB_TCP_OK; else echo DB_TCP_FAIL; exit 1; fi"]
