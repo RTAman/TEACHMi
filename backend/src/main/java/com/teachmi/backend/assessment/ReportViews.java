@@ -35,7 +35,22 @@ final class ReportViews {
     /** 다시 학습할 거리. 오답 때 채점기가 남긴 보완 개념을 쓴다. */
     record NextStep(UUID problemId, String focus) {}
 
-    /** status는 ready(리포트 준비) 또는 confirmed(학생이 확인해 학습 종료)다. */
+    /**
+     * 같은 개념의 바로 전 학습과 이번 학습을 비교한 숫자. 처음 학습하는 개념이면 리포트의 comparison이 null이다.
+     * hints는 힌트 보기와 쉬운 예시 요청을 합친 수, hesitations는 "잘 모르겠어" 요청 수다.
+     * keyElements(혼자 말한 핵심 요소 수)는 판정 데이터가 생기기 전까지 null이다.
+     */
+    record Comparison(UUID previousSessionId, Instant previousStudiedAt, Change keyElements, Change hints,
+                      Change hesitations) {}
+
+    /** 지난 학습의 값과 이번 학습의 값. 차이("2회 줄었어요")는 화면에서 previous - current로 계산한다. */
+    record Change(int previous, int current) {}
+
+    /**
+     * status는 ready(리포트 준비) 또는 confirmed(학생이 확인해 학습 종료)다.
+     * comparison은 저장된 본문이 아니라 조회할 때마다 계산한다.
+     */
     record ReportView(UUID reportId, UUID sessionId, String status, Instant createdAt, Instant confirmedAt,
-                      Concept concept, Explanation explanation, Application application, List<NextStep> nextSteps) {}
+                      Concept concept, Explanation explanation, Application application, List<NextStep> nextSteps,
+                      Comparison comparison) {}
 }
