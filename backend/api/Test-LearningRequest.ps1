@@ -45,12 +45,19 @@ foreach ($path in $spec.paths.Keys) {
         if ($operation.ContainsKey('requestBody')) {
             $sent = $testState.Captured.Body | ConvertFrom-Json -AsHashtable
             Assert-Contract ($sent.expectedVersion -is [long] -and $sent.text -ceq '한글과 "인용"') 'JSON types or text changed.'
-            Assert-Contract ($testState.Captured.Headers['Idempotency-Key'] -ceq 'stable-key') 'Request key changed.'
+            # Only routes that document IdempotencyKey send it (hesitations is recorded once per question instead).
+            $declaresKey = $operation.ContainsKey('parameters') -and
+                @($operation.parameters | Where-Object { $_.ContainsKey('$ref') -and $_['$ref'] -eq '#/components/parameters/IdempotencyKey' }).Count -gt 0
+            if ($declaresKey) {
+                Assert-Contract ($testState.Captured.Headers['Idempotency-Key'] -ceq 'stable-key') 'Request key changed.'
+            } else {
+                Assert-Contract (-not $testState.Captured.Headers.ContainsKey('Idempotency-Key')) 'Undocumented request key sent.'
+            }
         }
         $count++
     }
 }
-Assert-Contract ($count -eq 8) 'Unexpected documented operation count.'
+Assert-Contract ($count -eq 10) 'Unexpected documented operation count.'
 $testState.Status = 204; $testState.Content = ''
 $empty = & $runner -OperationId getActiveSession
 Assert-Contract ($empty.StatusCode -eq 204 -and $null -eq $empty.Body) '204 was not preserved.'
@@ -64,4 +71,4 @@ Assert-Rejected { & $runner -OperationId getSession -Preview }
 Assert-Rejected { & $runner -OperationId createSession -Body @{} -Preview }
 Assert-Rejected { & $runner -OperationId getActiveSession -Body @{} -Preview }
 Assert-Rejected { & $runner -OperationId getActiveSession -BaseUri 'https://user:secret@example.invalid' -Preview }
-Write-Output 'REQUEST RUNNER CHECKS PASSED: 8 routes, JSON/auth preservation, 204/errors, no retries/redirects, invalid inputs.'
+Write-Output 'REQUEST RUNNER CHECKS PASSED: 10 routes, JSON/auth preservation, 204/errors, no retries/redirects, invalid inputs.'

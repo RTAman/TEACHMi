@@ -200,7 +200,14 @@ class OfflineHttpJourneyTest {
     }
     void finishChat(Member member,String session) throws Exception {
         int attempts=0;
-        while(state(member,session).path("stage").asText().equals("chat") && attempts++<5) turn(member,session,"answer");
+        while(state(member,session).path("stage").asText().equals("chat") && attempts++<5) {
+            var current=state(member,session);
+            // 처음 학습은 wrapup 통과 뒤 '설명 마치기'를 눌러야 problem으로 넘어간다.
+            if(current.path("availableActions").path(0).asText().equals("finish_explanation"))
+                call(member,"POST",path(session)+"/explanation/finish",
+                        Map.of("expectedVersion",current.path("version").asLong()),UUID.randomUUID().toString(),200);
+            else turn(member,session,"answer");
+        }
         var completed=state(member,session);
         check("conversation reaches existing problem stage",completed.path("stage").asText().equals("problem"));
         String guidance=completed.path("problemReturn").isObject()?"같은 문제에 다시 도전해 보세요.":"이제 응용문제를 풀어 보세요.";
