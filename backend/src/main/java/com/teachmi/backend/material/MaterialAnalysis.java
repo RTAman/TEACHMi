@@ -98,11 +98,22 @@ class MaterialAnalysis {
             try {
                 pages = MaterialTextExtractor.extract(job.format(), job.content());
             } catch (MaterialTextExtractor.UnreadableFile e) {
+                // 원인 종류만 남긴다. 파일 내용과 예외 메시지 전문은 로그에 쓰지 않는다.
+                log.warn("Material file unreadable: material={} version={} format={} bytes={} reason={}",
+                        materialId, version, job.format().code, job.content().length, e.reason());
                 finish(materialId, version, "format", List.of());
+                return;
+            } catch (OutOfMemoryError | StackOverflowError e) {
+                // 잡지 않으면 자료가 analyzing으로 남는다. 다시 시도할 수 있도록 실패로 기록한다.
+                log.warn("Material analysis exhausted resources: material={} version={} format={} bytes={} error={}",
+                        materialId, version, job.format().code, job.content().length, e.getClass().getSimpleName());
+                finish(materialId, version, "analysis", List.of());
                 return;
             }
             int textChars = pages.stream().mapToInt(page -> page.text().replaceAll("\\s", "").length()).sum();
             if (textChars < MIN_TEXT_CHARS) {
+                log.info("Material has no readable text: material={} version={} format={} bytes={} pages={} chars={}",
+                        materialId, version, job.format().code, job.content().length, pages.size(), textChars);
                 finish(materialId, version, "no_text", List.of());
                 return;
             }
