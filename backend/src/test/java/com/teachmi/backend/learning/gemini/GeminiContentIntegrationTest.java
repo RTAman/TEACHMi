@@ -113,6 +113,53 @@ class GeminiContentIntegrationTest {
     }
 
     @Test
+    void firstLearningSummaryCitesByCandidateIdAndTheStoredResultReplaysWithoutAnotherCall() throws Exception {
+        doAnswer(call -> {
+            var request = json.readTree(call.getArgument(0, String.class));
+            var data = json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
+            assertThat(data.path("operation").asText()).isEqualTo("summary");
+            assertThat(data.path("promptVersion").asText()).isEqualTo(GeminiContentGenerator.SUMMARY_VERSION);
+            var properties = request.path("generationConfig").path("responseJsonSchema").path("properties");
+            assertThat(properties.has("evidence")).isFalse();
+            assertThat(properties.has("sourceChunkIds")).isFalse();
+            assertThat(request.path("systemInstruction").path("parts").get(0).path("text").asText())
+                    .contains("Return \"citations\"");
+            var candidates = data.path("citationCandidates");
+            assertThat(GeminiFixtures.SOURCE).contains(candidates.get(0).path("quote").asText());
+            String chosen = candidates.get(candidates.size() - 1).path("id").asText();
+            return GeminiFixtures.envelope(json, json.writeValueAsString(Map.of(
+                    "text", "취득원가를 사용 기간에 나눠 배분합니다.", "citations", List.of(chosen),
+                    "examples", List.of("600만 원을 3년에 나누면 연간 200만 원입니다."),
+                    "keyTerms", List.of("내용연수", "정액법"), "reflectionPrompt", "사용 기간에 나누는 이유를 설명해 볼까요?")), "STOP");
+        }).when(transport).generate(anyString());
+
+        var prepared = mode("first", "summary");
+        assertThat(prepared.path("stage").asText()).isEqualTo("summary");
+        assertThat(prepared.path("summary").path("text").asText()).contains("사용 기간");
+        assertThat(prepared.path("summary").path("sourceChunkIds").get(0).asText()).isEqualTo("k01");
+        String stored = jdbc.queryForObject(
+                "SELECT content_json FROM teachmi.learning_ai_generation WHERE state='succeeded'", String.class);
+        assertThat(json.readTree(stored).has("citations")).as("원장에는 모델 원본 응답을 그대로 보관").isTrue();
+        assertThat(mode("first", "summary")).isEqualTo(prepared);
+        verify(transport, times(1)).generate(anyString());
+    }
+
+    @Test
+    void anUnknownCandidateIdStillFailsValidation() throws Exception {
+        doReturn(GeminiFixtures.envelope(json, json.writeValueAsString(Map.of(
+                "text", "취득원가를 사용 기간에 나눠 배분합니다.", "citations", List.of("c99"),
+                "examples", List.of("예시"), "keyTerms", List.of("내용연수"), "reflectionPrompt", "왜일까요?")), "STOP"))
+                .when(transport).generate(anyString());
+        var failed = mvc.perform(put("/api/v1/sessions/" + id + "/mode").principal(() -> "u1")
+                .header("Idempotency-Key", "bad-candidate").contentType("application/json")
+                .content("{\"mode\":\"first\",\"expectedVersion\":0}")).andReturn().getResponse();
+        assertThat(failed.getStatus()).isEqualTo(502);
+        assertThat(json.readTree(failed.getContentAsByteArray()).path("recovery").path("diagnosticCode").asText())
+                .isEqualTo("EVIDENCE_CANDIDATE_INVALID");
+        assertThat(sessions.get("u1", UUID.fromString(id)).stage()).isEqualTo("mode");
+    }
+
+    @Test
     void reviewUsesStudentCaseQuestionAndReceiptReplayDoesNotCallGemini() throws Exception {
         var result = mode("review", "review");
         assertThat(result.path("summary").isNull()).isTrue();
@@ -201,7 +248,7 @@ class GeminiContentIntegrationTest {
         doAnswer(call -> {
             var request=json.readTree(call.getArgument(0,String.class));
             var input=json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
-            assertThat(input.path("promptVersion").asText()).isEqualTo("teachmi-dialogue-v5");
+            assertThat(input.path("promptVersion").asText()).isEqualTo("teachmi-dialogue-v6");
             String stage=input.path("dialogue").path("chatStage").asText();
             String kind=input.path("dialogue").path("kind").asText();
             var policy=input.path("responsePolicy");policies.add(policy);
@@ -301,7 +348,7 @@ class GeminiContentIntegrationTest {
         assertThat(result.path("availableActions").get(0).asText()).isEqualTo("finish_explanation");
         assertThat(result.path("finalExplanationId").isNull()).as("설명 마치기 전").isTrue();
         assertThat(result.path("messages").get(7).path("text").asText()).isEqualTo(explanation);
-        String key=historicalKey("teachmi-dialogue-v5",requestJson.get());
+        String key=historicalKey("teachmi-dialogue-v6",requestJson.get());
         String payload=jdbc.queryForObject("SELECT content_json FROM teachmi.learning_ai_generation WHERE generation_key=?",String.class,key);
         assertThat(json.readTree(payload).path("text").asText()).isEqualTo(modelText);
         var receipts=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
@@ -462,9 +509,14 @@ class GeminiContentIntegrationTest {
         doAnswer(call -> {
             var request=json.readTree(call.getArgument(0,String.class));
             var data=json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
-            assertThat(data.path("promptVersion").asText()).isEqualTo("teachmi-question-v2");
-            String quote=data.path("citationCandidates").get(0).path("quote").asText();
-            return GeminiFixtures.response(json,false).replace(GeminiFixtures.QUOTE,quote);
+            assertThat(data.path("promptVersion").asText()).isEqualTo("teachmi-question-v3");
+            // 새 형식: 모델은 후보 번호만 고르고 서버가 원문 구절과 출처를 붙인다.
+            assertThat(data.path("citationCandidates").get(0).path("id").asText()).isEqualTo("c01");
+            var schema=request.path("generationConfig").path("responseJsonSchema").path("properties");
+            assertThat(schema.has("evidence")).isFalse();
+            assertThat(schema.path("citations").path("items").path("enum").get(0).asText()).isEqualTo("c01");
+            return GeminiFixtures.envelope(json,json.writeValueAsString(Map.of(
+                    "text","3년 쓰는 컴퓨터 구입비를 첫해에 모두 비용 처리할까요?","citations",List.of("c01"))),"STOP");
         }).when(transport).generate(anyString());
         assertThat(mode("review","opening").path("stage").asText()).isEqualTo("chat");
         verify(transport,times(2)).generate(anyString());

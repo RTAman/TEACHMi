@@ -42,6 +42,14 @@ JSON 스키마를 지정하고 서버에서 필수 필드·타입·목록·길�
 
 응답의 각 출처 ID는 선택 개념의 실제 원문에 존재해야 합니다. 각 ID에는 최소 6글자의 근거 인용문이 필요하며 해당 원문의 정확한 부분 문자열인지 검사합니다. 설명의 의미적 정확성과 학생 역할의 질문 품질은 실제 수업 자료로 추가 검수합니다.
 
+### 후보 번호 인용 (summary-v2 · question-v3 · dialogue-v6 · reteach-v5)
+
+배포 로그에서 `EVIDENCE_QUOTE_NOT_EXACT` 두 번 뒤 `AI_ATTEMPT_LIMIT`이 확인됐습니다. 처음 학습 요약(content-v1)은 인용 후보 없이 모델이 원문을 직접 옮겨 쓰게 했고, 질문·대화·재설명은 후보 인용문과 출처 ID를 모델이 따로 골라 여러 조각 자료에서 짝이 어긋날 수 있었습니다.
+
+이제 B의 네 생성 요청은 `citationCandidates`에 `{id: "c01", sourceChunkId, quote}`를 제공하고, 모델은 응답에 `citations: ["c03"]`처럼 **후보 번호 1~2개만** 냅니다(스키마 enum). 서버(`CandidateCitations`)가 번호에 해당하는 원문 구절과 그 구절의 출처 ID를 `sourceChunkIds`·`evidence`로 붙인 뒤, 기존과 똑같이 `GroundedSources`의 정확한 부분 문자열 검사와 기존 업무 검증을 거칩니다. 검증 규칙은 바꾸지 않았고 모델 응답을 고치지 않습니다. 없는 번호는 `EVIDENCE_CANDIDATE_INVALID`, 중복은 `CITATION_ID_DUPLICATE`, 3개 이상은 `CITATION_CARDINALITY_INVALID`, 번호와 출처·인용 필드를 함께 보내면 `EVIDENCE_STRUCTURE_INVALID`로 거절합니다.
+
+원장에는 모델의 원본 응답(`citations`)을 그대로 저장하고, 캐시 적중 때도 같은 원문에서 같은 후보를 다시 계산해 변환·검증합니다. 이전 버전(content-v1, question-v2, dialogue-v5…, reteach-v4…)의 성공 결과는 이전 형식 그대로 재사용합니다. 프롬프트 버전이 바뀌어 생성 키가 새로 만들어지는 것은 이전 버전 변경과 같으며, 같은 학습의 `uncertain`·`running` 기록은 계속 새 호출을 막습니다. 실패·한도 기록을 지우거나 시도 수를 초기화하지 않습니다.
+
 ## 사용량·재시도·중복 생성
 
 기존 API의 Idempotency-Key·학습 버전 검사를 유지합니다. 내부 생성 키에는 회원·세션·자료·개념·모드·원문·저장된 요약·모델·프롬프트 버전을 반영하며 새 질문·대화와 공통 포트의 JSON을 정렬해 재기동 후에도 같은 키를 만듭니다. 과거 단독 v1의 필드 순서 변형은 읽기 전용 캐시 조회로 보완합니다.

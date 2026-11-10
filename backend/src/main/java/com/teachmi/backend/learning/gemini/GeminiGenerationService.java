@@ -29,6 +29,13 @@ final class GeminiGenerationService {
     private final ObjectMapper json;
     private final ObjectProvider<LearningSessionService> sessions;
     record Previous<T>(String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {}
+    /**
+     * Turns the model's raw JSON into the grounded citation form before GroundedSources checks it.
+     * Must be deterministic from the payload and the owned source text (cache hits are resolved again)
+     * and must never relax the exact-substring rule: GroundedSources still validates the result.
+     */
+    @FunctionalInterface interface Resolver { JsonNode resolve(JsonNode raw,List<LearningSourceReader.Chunk> chunks); }
+    static final Resolver AS_IS=(raw,chunks) -> raw;
     GeminiGenerationService(GeminiSettings settings,ObjectProvider<LearningSourceReader> sources,
                             GeminiTransport transport,GeminiLedger ledger,ObjectMapper json) {
         this(settings,sources,transport,ledger,json,null);
@@ -132,14 +139,25 @@ final class GeminiGenerationService {
 
     <T> T legacyWithPreviousSuccesses(LearningContentGenerator.Context context,String version,
             Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,List<Previous<T>> previous) {
+        return legacyWithPreviousSuccesses(context,version,composer,validator,previous,AS_IS);
+    }
+
+    /** The resolver applies only to the current version; historical successes are restored exactly as before. */
+    <T> T legacyWithPreviousSuccesses(LearningContentGenerator.Context context,String version,
+            Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,List<Previous<T>> previous,
+            Resolver resolver) {
         return execute(new Scope(context.memberId(),context.sessionId(),context.materialId(),context.conceptId(),
-                context.concept().sourceChunkIds()),version,composer,validator,previous);
+                context.concept().sourceChunkIds()),version,composer,validator,previous,resolver);
     }
 
     private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator) {
         return execute(scope,version,composer,validator,List.of());
     }
     private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,List<Previous<T>> previous) {
+        return execute(scope,version,composer,validator,previous,AS_IS);
+    }
+    private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,
+                          List<Previous<T>> previous,Resolver resolver) {
         var reader=sources.getIfAvailable();
         if(reader==null) throw new LearningException(503,"LEARNING_SOURCE_INTEGRATION_PENDING","A의 자료 소유권 검증·원문 조회 연결이 필요합니다.");
         if(settings.apiKey().isBlank() || !settings.model().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,99}")) {
@@ -151,7 +169,7 @@ final class GeminiGenerationService {
         var key=hash(version+"\n"+settings.model()+"\n"+request);
         if(!previous.isEmpty()) {
             String saved=ledger.succeeded(key,scope.memberId(),scope.sessionId());
-            if(saved!=null) return cached(saved,chunks,validator);
+            if(saved!=null) return cached(saved,chunks,validator,resolver);
             var historicalKeys=new java.util.LinkedHashMap<String,Validator<T>>();
             for(var historicalVersion:previous) {
                 String oldRequest=historicalVersion.composer().apply(chunks);
@@ -161,7 +179,7 @@ final class GeminiGenerationService {
             var historical=ledger.succeededAmong(historicalKeys.keySet().stream().toList(),scope.memberId(),scope.sessionId());
             for(var entry:historicalKeys.entrySet()) {
                 String payload=historical.get(entry.getKey());
-                if(payload!=null) return cached(payload,chunks,entry.getValue());
+                if(payload!=null) return cached(payload,chunks,entry.getValue(),AS_IS);
             }
         }
         String cached;
@@ -174,13 +192,13 @@ final class GeminiGenerationService {
             throw failure;
         }
         if(cached!=null) {
-            return cached(cached,chunks,validator);
+            return cached(cached,chunks,validator,resolver);
         }
         String payload;
         T result;
         try {
             payload=extract(transport.generate(request));
-            result=validate(payload,chunks,validator);
+            result=validate(payload,chunks,validator,resolver);
         } catch(GeminiCallFailure failure) {
             String detail=GeminiDiagnostics.safe(failure.diagnostic);
             LOG.warn("Gemini stage=TRANSPORT diagnostic={}",detail);
@@ -208,15 +226,17 @@ final class GeminiGenerationService {
         }
         return result;
     }
-    private <T> T cached(String payload,List<LearningSourceReader.Chunk> chunks,Validator<T> validator) {
-        try { return validate(payload,chunks,validator); }
+    private <T> T cached(String payload,List<LearningSourceReader.Chunk> chunks,Validator<T> validator,Resolver resolver) {
+        try { return validate(payload,chunks,validator,resolver); }
         catch(RuntimeException invalid) {
             String detail=diagnostic(invalid);LOG.warn("Gemini stage=CACHE_VALIDATION diagnostic={}",detail);
             throw invalidResponse("CACHE_VALIDATION",detail,false);
         }
     }
-    private <T> T validate(String payload,List<LearningSourceReader.Chunk> chunks,Validator<T> validator) {
+    private <T> T validate(String payload,List<LearningSourceReader.Chunk> chunks,Validator<T> validator,Resolver resolver) {
         var parsed=readJson(payload,"CONTENT_JSON_INVALID");
+        if(parsed==null || !parsed.isObject()) throw new GeminiResponseFailure("JSON_SCHEMA_INVALID");
+        parsed=resolver.resolve(parsed,chunks);
         if(parsed==null || !parsed.isObject()) throw new GeminiResponseFailure("JSON_SCHEMA_INVALID");
         GroundedSources.citations(parsed,chunks);
         return Objects.requireNonNull(validator.validate(parsed));
