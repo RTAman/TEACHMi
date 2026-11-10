@@ -532,8 +532,12 @@ class OfflineHttpJourneyTest {
                     .filter(row -> row.get("operation").toString().startsWith("assessment/"))
                     .allMatch(row -> row.get("maxOutputTokens").equals(6144)));
             var dialogueRequests=gateway.audit.stream().filter(row -> row.get("operation").equals("dialogue")).toList();
-            check("B dialogue uses the stage aware v5 policy",!dialogueRequests.isEmpty() && dialogueRequests.stream()
-                    .allMatch(row -> row.get("promptVersion").equals("teachmi-dialogue-v5")));
+            check("B dialogue uses the stage aware policy with candidate-id citations",!dialogueRequests.isEmpty() && dialogueRequests.stream()
+                    .allMatch(row -> row.get("promptVersion").equals("teachmi-dialogue-v6")));
+            check("B summary and opening question use candidate-id citations",gateway.audit.stream()
+                    .filter(row -> List.of("summary","question").contains(row.get("operation")))
+                    .allMatch(row -> List.of(GeminiContentGenerator.SUMMARY_VERSION,GeminiContentGenerator.QUESTION_VERSION)
+                            .contains(row.get("promptVersion"))));
             var reasons=dialogueRequests.stream().filter(row -> row.get("chatStage").equals("reason") && row.get("turnKind").equals("answer")).toList();
             check("reason asks for the user final explanation without completion",!reasons.isEmpty() && reasons.stream()
                     .allMatch(row -> row.get("responseAction").equals("REQUEST_USER_FINAL_EXPLANATION") && row.get("dialogueComplete").equals(false)));

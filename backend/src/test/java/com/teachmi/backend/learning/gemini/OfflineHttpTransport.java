@@ -53,7 +53,16 @@ final class OfflineHttpTransport implements GeminiTransport {
                 throw new AssertionError("C operations require bounded quote choices");
         }
         if("bad-quote".equals(injection)) quote="실제 원문과 일치하지 않는 인용문입니다.";
-        output.put("evidence",List.of(Map.of("sourceChunkId",id,"quote",quote)));
+        var offered=data.path("citationCandidates");
+        if(injection==null && !operation.startsWith("assessment/") && offered.path(0).has("id")) {
+            // B requests now ask for candidate ids; the server attaches the literal quote and source.
+            String chosen=offered.get(0).path("id").asText();
+            for(var candidate:offered) if(candidate.path("sourceChunkId").asText().equals(id)) { chosen=candidate.path("id").asText(); break; }
+            output.remove("sourceChunkIds");
+            output.put("citations",List.of(chosen));
+        } else {
+            output.put("evidence",List.of(Map.of("sourceChunkId",id,"quote",quote)));
+        }
         switch(operation) {
             case "summary" -> {
                 output.put("text","선택한 원문의 핵심 원리를 살펴봅니다.");
