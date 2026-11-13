@@ -41,9 +41,9 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 
 **이미 실행 중인 PostgreSQL 17을 쓰는 경우**에는 서버 관리자 계정으로 `createuser --pwprompt teachmi`와 `createdb --owner=teachmi teachmi`를 실행해 개발 전용 계정과 DB를 만듭니다. 이미 준비된 계정과 DB가 있으면 그대로 사용하세요. `backend/.env`에 해당 값과 실제 포트(일반적인 로컬 설치는 `DB_PORT=5432`)를 입력한 뒤 위 절차에서 Compose 단계를 건너뛰고 `bootRun`을 실행합니다.
 
-## 담당 기능과 첫 작업
+## 백엔드 구성과 담당 영역
 
-[공통 작업 계획서](../TEACHMi%20백엔드%20작업%20계획서.docx)에서 전체 API 계약과 일정을 확인할 수 있습니다. 각자 아래 패키지에 첫 기능을 추가합니다. 기본 프로젝트가 제공하는 HTTP 경로는 서버 상태 조회이며, 업무 API는 `/api/v1` 아래에 구현합니다.
+[공통 작업 계획서](../TEACHMi%20백엔드%20작업%20계획서.docx)는 초기 작업 분담 자료입니다. 현재 인증·자료·학습·평가·리포트 API가 하나의 애플리케이션에 구현되어 있으며, 업무 API의 기본 경로는 `/api/v1`입니다. 최신 요청·응답은 아래 연동 문서를 기준으로 확인하세요.
 
 | 담당 | 패키지 · 이슈 | 개발 가이드 | 먼저 공유할 결과 |
 | --- | --- | --- | --- |
@@ -61,7 +61,7 @@ Compose와 Spring 모두 `backend/.env`를 읽습니다. 이미 만든 DB 볼륨
 | --- | --- | --- | --- |
 | A파트 (인증·자료) | [AUTH_API_HANDOFF.md](AUTH_API_HANDOFF.md) | [api/auth-materials.openapi.json](api/auth-materials.openapi.json) | [AUTH_MATERIALS.md](AUTH_MATERIALS.md) |
 | B파트 (학습·대화) | [API_HANDOFF.md](API_HANDOFF.md) | [api/openapi.json](api/openapi.json) | 아래 각 계약 문서 |
-| C파트 (홈·평가·리포트) | 준비 중 | 준비 중 | 준비 중 |
+| C파트 (홈·평가·리포트) | [ASSESSMENT_API.md](ASSESSMENT_API.md) | 별도 OpenAPI 문서 없음 | [평가·리포트 상태 전환](ASSESSMENT_TRANSITIONS.md) |
 
 B의 세션 생성·조회 API, 새 시작 확인과 재시도 규칙, A가 구현할 인증·개념 연결 인터페이스는 [학습 세션 연동 계약](LEARNING_SESSIONS.md)에 정리했습니다.
 
