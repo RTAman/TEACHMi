@@ -110,6 +110,7 @@ class AuthApiTest {
         assertThat(login.getHeader("Cache-Control")).contains("no-store");
         var loginBody = body(login);
         assertThat(loginBody.path("email").asText()).isEqualTo("me@example.com");
+        assertThat(loginBody.path("guest").asBoolean(true)).isFalse();
         assertThat(loginBody.path("csrfToken").asText()).isNotBlank();
 
         String tokenHash = jdbc.queryForObject("SELECT token_hash FROM teachmi.auth_session", String.class);
@@ -171,6 +172,63 @@ class AuthApiTest {
         assertThat(again.getStatus()).isEqualTo(200);
         assertThat(mvc.perform(get("/api/v1/auth/me").cookie(again.getCookie("TEACHMI_SESSION")))
                 .andReturn().getResponse().getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void guestLoginCreatesASeparateTemporaryMemberWithoutSignup() throws Exception {
+        var first = mvc.perform(post("/api/v1/auth/guest")).andReturn().getResponse();
+        assertThat(first.getStatus()).isEqualTo(201);
+        assertThat(first.getHeader("Location")).isEqualTo("/api/v1/auth/me");
+        assertThat(first.getHeader("Cache-Control")).contains("no-store");
+        var cookie = first.getCookie("TEACHMI_SESSION");
+        assertThat(cookie).isNotNull();
+        assertThat(cookie.isHttpOnly()).isTrue();
+        var guest = body(first);
+        assertThat(guest.path("guest").asBoolean()).isTrue();
+        assertThat(guest.path("email").asText()).startsWith("guest-").endsWith("@guest.teachmi.invalid");
+        String csrf = guest.path("csrfToken").asText();
+        assertThat(csrf).isNotBlank();
+        assertThat(guest.path("expiresAt").asText()).isNotBlank();
+
+        var me = mvc.perform(get("/api/v1/auth/me").cookie(cookie)).andReturn().getResponse();
+        assertThat(me.getStatus()).isEqualTo(200);
+        assertThat(body(me).path("id").asText()).isEqualTo(guest.path("id").asText());
+        assertThat(body(me).path("guest").asBoolean()).isTrue();
+
+        // 게스트도 일반 회원과 같은 쿠키·CSRF 규칙으로 다른 API를 쓴다.
+        var material = mvc.perform(post("/api/v1/materials").cookie(cookie).header(AuthFilter.CSRF_HEADER, csrf)
+                .header("Idempotency-Key", "guest-1").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"text\":\"감가상각은 취득원가를 내용연수 동안 배분하는 과정이다.\"}")).andReturn().getResponse();
+        assertThat(material.getStatus()).isEqualTo(201);
+        assertThat(mvc.perform(post("/api/v1/materials").cookie(cookie).header("Idempotency-Key", "guest-2")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"text\":\"원문\"}")).andReturn().getResponse()
+                .getStatus()).as("CSRF 없는 변경 요청은 게스트도 403").isEqualTo(403);
+
+        var second = body(mvc.perform(post("/api/v1/auth/guest")).andReturn().getResponse());
+        assertThat(second.path("id").asText()).as("게스트마다 따로 계정을 만든다").isNotEqualTo(guest.path("id").asText());
+        String materialId = body(material).path("materialId").asText();
+        var secondCookie = new Cookie("TEACHMI_SESSION", mvc.perform(post("/api/v1/auth/guest")).andReturn()
+                .getResponse().getCookie("TEACHMI_SESSION").getValue());
+        assertThat(mvc.perform(get("/api/v1/materials/" + materialId).cookie(secondCookie)).andReturn().getResponse()
+                .getStatus()).as("다른 게스트의 자료는 보이지 않는다").isEqualTo(404);
+
+        var logout = mvc.perform(post("/api/v1/auth/logout").cookie(cookie).header(AuthFilter.CSRF_HEADER, csrf))
+                .andReturn().getResponse();
+        assertThat(logout.getStatus()).isEqualTo(204);
+        assertThat(mvc.perform(get("/api/v1/auth/me").cookie(cookie)).andReturn().getResponse().getStatus())
+                .isEqualTo(401);
+    }
+
+    @Test
+    void guestAccountsCannotBeRegisteredOrLoggedIntoWithAPassword() throws Exception {
+        var guest = body(mvc.perform(post("/api/v1/auth/guest")).andReturn().getResponse());
+        String email = guest.path("email").asText();
+        var signup = signup("someone@GUEST.teachmi.invalid", "correct-horse");
+        assertThat(signup.getStatus()).isEqualTo(422);
+        assertThat(body(signup).path("code").asText()).isEqualTo("INVALID_EMAIL");
+        assertThat(login(email, "correct-horse").getStatus()).isEqualTo(401);
+        String stored = jdbc.queryForObject("SELECT password_hash FROM teachmi.app_user WHERE email = ?", String.class, email);
+        assertThat(stored).startsWith("$2");
     }
 
     @Test

@@ -22,7 +22,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class AuthFilter extends OncePerRequestFilter {
     public static final String CSRF_HEADER = "X-CSRF-Token";
     private static final Set<String> SAFE_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
-    private static final Set<String> CSRF_EXEMPT = Set.of("/api/v1/auth/signup", "/api/v1/auth/login");
+    private static final Set<String> CSRF_EXEMPT = Set.of("/api/v1/auth/signup", "/api/v1/auth/login",
+            "/api/v1/auth/guest");
 
     private final AuthService auth;
     private final AuthProperties properties;

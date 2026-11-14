@@ -195,6 +195,14 @@ Add-Check '로그인 확인 /auth/me' ($me.Status -eq 200 -and (Get-Prop $me.Bod
 $anonymous = Invoke-Api (New-Client) 'GET' '/auth/me'
 Add-Check '비로그인 /auth/me → 401' ($anonymous.Status -eq 401) "HTTP $($anonymous.Status)"
 
+# 게스트 로그인 (가입 없이 체험). 실행할 때마다 게스트 계정이 하나 생깁니다.
+$guest = New-Client
+$guestLogin = Invoke-Api $guest 'POST' '/auth/guest'
+$guest.Csrf = Get-Prop $guestLogin.Body 'csrfToken'
+$guestMe = Invoke-Api $guest 'GET' '/auth/me'
+Add-Check '게스트 로그인 → 201, /auth/me guest=true' ($guestLogin.Status -eq 201 -and (Get-Prop $guestLogin.Body 'guest') -eq $true -and $guest.Csrf -and $guestMe.Status -eq 200 -and (Get-Prop $guestMe.Body 'guest') -eq $true -and (Get-Prop $me.Body 'guest') -eq $false) "HTTP $($guestLogin.Status)/$($guestMe.Status)"
+[void](Invoke-Api $guest 'POST' '/auth/logout')
+
 # 4. 직접 입력 자료
 $text = Invoke-Api $a 'POST' '/materials' @{ text = 'Depreciation allocates the cost of an asset over its useful life.'; concept = @{ name = 'Depreciation'; scope = 'Why cost is spread over the useful life' } } -Headers @{ 'Idempotency-Key' = (New-Key) }
 $textId = Get-Prop $text.Body 'materialId'

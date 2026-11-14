@@ -40,6 +40,8 @@ teachmi:
     session-ttl: ${AUTH_SESSION_TTL:7d}
     login-max-failures: ${AUTH_LOGIN_MAX_FAILURES:5}
     login-failure-window: ${AUTH_LOGIN_FAILURE_WINDOW:15m}
+    guest-enabled: ${AUTH_GUEST_ENABLED:true}
+    guest-max-per-hour: ${AUTH_GUEST_MAX_PER_HOUR:100}
   materials:
     max-file-size: ${MATERIAL_MAX_FILE_SIZE:20MB}
   gemini:

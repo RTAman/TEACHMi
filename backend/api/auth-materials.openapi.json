@@ -3,7 +3,7 @@
   "info": {
     "title": "TEACHMi backend A파트 HTTP API (인증·자료)",
     "version": "1.0.0",
-    "description": "백엔드 A파트의 회원 인증과 자료·개념 API입니다. 로그인은 이메일+비밀번호이며 TEACHMI_SESSION HttpOnly 쿠키로 유지합니다. 로그인 상태에서 POST·PUT·PATCH·DELETE 요청은 X-CSRF-Token 헤더가 필요합니다(로그인·회원가입 제외). 값은 로그인 응답 또는 GET /api/v1/auth/me의 csrfToken입니다. 오류 본문은 {code, message}입니다. 연동 순서와 예시 코드는 backend/AUTH_API_HANDOFF.md를 참고하세요."
+    "description": "백엔드 A파트의 회원 인증과 자료·개념 API입니다. 로그인은 이메일+비밀번호이며 TEACHMI_SESSION HttpOnly 쿠키로 유지합니다. 로그인 상태에서 POST·PUT·PATCH·DELETE 요청은 X-CSRF-Token 헤더가 필요합니다(로그인·회원가입·게스트 로그인 제외). 값은 로그인 응답 또는 GET /api/v1/auth/me의 csrfToken입니다. 오류 본문은 {code, message}입니다. 연동 순서와 예시 코드는 backend/AUTH_API_HANDOFF.md를 참고하세요."
   },
   "servers": [
     {
@@ -14,7 +14,7 @@
   "tags": [
     {
       "name": "auth",
-      "description": "회원가입·로그인·로그인 확인·로그아웃"
+      "description": "회원가입·로그인·게스트 로그인·로그인 확인·로그아웃"
     },
     {
       "name": "materials",
@@ -76,7 +76,7 @@
             }
           },
           "422": {
-            "description": "이메일 형식 (INVALID_EMAIL), 비밀번호 8~64자 (INVALID_PASSWORD), 항목 누락 (INVALID_REQUEST)",
+            "description": "이메일 형식 또는 게스트 전용 도메인 (INVALID_EMAIL), 비밀번호 8~64자 (INVALID_PASSWORD), 항목 누락 (INVALID_REQUEST)",
             "content": {
               "application/json": {
                 "schema": {
@@ -161,6 +161,56 @@
           },
           "429": {
             "description": "15분 안에 5번 실패 (TOO_MANY_LOGIN_ATTEMPTS)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/guest": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "loginAsGuest",
+        "summary": "게스트 로그인 (가입 없이 체험)",
+        "description": "요청 본문 없이 호출하면 임시 계정을 만들고 바로 로그인시킵니다. 로그인과 같은 TEACHMI_SESSION 쿠키와 csrfToken을 발급하며 이후 흐름은 일반 회원과 같습니다. 게스트마다 계정이 따로 만들어지므로 다른 게스트의 자료는 보이지 않습니다. 쿠키가 사라지거나 로그아웃하면 그 게스트 계정으로 다시 들어갈 수 없습니다. 서비스 전체에서 1시간에 만들 수 있는 게스트 수에 제한이 있습니다(기본 100).",
+        "responses": {
+          "201": {
+            "description": "게스트 계정 생성과 로그인 완료. guest=true",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginView"
+                }
+              }
+            },
+            "headers": {
+              "Set-Cookie": {
+                "description": "TEACHMI_SESSION=...; Path=/; HttpOnly; SameSite=Lax",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "게스트 로그인이 꺼져 있음 (GUEST_LOGIN_DISABLED)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "1시간 동안 만들 수 있는 게스트 수를 넘음 (TOO_MANY_GUESTS)",
             "content": {
               "application/json": {
                 "schema": {
@@ -875,6 +925,7 @@
         "required": [
           "id",
           "email",
+          "guest",
           "csrfToken",
           "expiresAt"
         ],
@@ -885,6 +936,10 @@
           },
           "email": {
             "type": "string"
+          },
+          "guest": {
+            "type": "boolean",
+            "description": "게스트 로그인으로 만든 임시 계정이면 true"
           },
           "csrfToken": {
             "type": "string"
@@ -902,6 +957,7 @@
         "required": [
           "id",
           "email",
+          "guest",
           "csrfToken"
         ],
         "properties": {
@@ -911,6 +967,10 @@
           },
           "email": {
             "type": "string"
+          },
+          "guest": {
+            "type": "boolean",
+            "description": "게스트 로그인으로 만든 임시 계정이면 true"
           },
           "csrfToken": {
             "type": "string"

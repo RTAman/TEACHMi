@@ -20,18 +20,23 @@ public class AuthService {
     private static final int MIN_PASSWORD = 8;
     private static final int MAX_PASSWORD = 64;
     private static final int BCRYPT_MAX_BYTES = 72;
+    /** 게스트 계정 이메일의 도메인. .invalid는 실제로 존재할 수 없는 예약 도메인이다. */
+    static final String GUEST_DOMAIN = "guest.teachmi.invalid";
 
     private final JdbcTemplate jdbc;
     private final BCryptPasswordEncoder encoder;
     private final AuthProperties properties;
     private final LoginThrottle throttle;
+    private final GuestThrottle guestThrottle;
     private final String dummyHash;
 
-    AuthService(JdbcTemplate jdbc, BCryptPasswordEncoder encoder, AuthProperties properties, LoginThrottle throttle) {
+    AuthService(JdbcTemplate jdbc, BCryptPasswordEncoder encoder, AuthProperties properties, LoginThrottle throttle,
+                GuestThrottle guestThrottle) {
         this.jdbc = jdbc;
         this.encoder = encoder;
         this.properties = properties;
         this.throttle = throttle;
+        this.guestThrottle = guestThrottle;
         // 없는 이메일로 로그인해도 비밀번호 검사 시간을 비슷하게 맞춘다.
         this.dummyHash = encoder.encode("teachmi-timing-equalizer");
     }
@@ -43,7 +48,7 @@ public class AuthService {
     @Transactional
     public Member signup(String rawEmail, String password) {
         String email = normalize(rawEmail);
-        if (email.length() > 254 || !EMAIL.matcher(email).matches()) {
+        if (email.length() > 254 || !EMAIL.matcher(email).matches() || isGuest(email)) {
             throw ApiException.invalid("INVALID_EMAIL", "이메일 형식을 확인하세요.");
         }
         validatePassword(password);
@@ -79,7 +84,34 @@ public class AuthService {
         }
         throttle.reset(email);
         var row = found.getFirst();
-        var member = new Member((UUID) row[0], (String) row[1]);
+        return startSession(new Member((UUID) row[0], (String) row[1]));
+    }
+
+    /**
+     * 가입 없이 체험할 수 있는 임시 계정을 만들고 바로 로그인시킨다.
+     * 비밀번호는 아무도 모르는 임의 값이라 이메일·비밀번호로는 로그인할 수 없고, 쿠키가 사라지면 다시 들어갈 수 없다.
+     */
+    @Transactional
+    Login guest() {
+        if (!properties.guestEnabled()) {
+            throw new ApiException(404, "GUEST_LOGIN_DISABLED", "게스트 체험을 사용할 수 없습니다. 회원가입 후 이용하세요.");
+        }
+        if (!guestThrottle.tryAcquire()) {
+            throw new ApiException(429, "TOO_MANY_GUESTS", "게스트 접속이 많습니다. 잠시 후 다시 시도하거나 회원가입 후 이용하세요.");
+        }
+        var id = UUID.randomUUID();
+        var member = new Member(id, "guest-" + id.toString().replace("-", "") + "@" + GUEST_DOMAIN);
+        jdbc.update("INSERT INTO teachmi.app_user(id, email, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                member.id(), member.email(), encoder.encode(AuthTokens.newToken()), now());
+        return startSession(member);
+    }
+
+    /** 게스트 계정 이메일인지. 게스트 도메인은 일반 가입에 쓸 수 없다. */
+    public static boolean isGuest(String email) {
+        return email != null && email.endsWith("@" + GUEST_DOMAIN);
+    }
+
+    private Login startSession(Member member) {
         String token = AuthTokens.newToken();
         var createdAt = now();
         var expiresAt = createdAt.plus(properties.sessionTtl());
