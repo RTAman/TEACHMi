@@ -1,6 +1,6 @@
 # A파트 인증·자료 연동 계약
 
-[백엔드 A 이슈 #4](https://github.com/RTAman/TEACHMi/issues/4)의 구현입니다. 이메일·비밀번호 가입과 쿠키 로그인, 파일 업로드(PDF·PPT·PPTX)·분석·재시도와 직접 입력 자료, 개념 후보 추가·수정, B가 정의한 `CurrentMember`·`ConceptSource`·`LearningSourceReader` 연결을 제공합니다.
+[백엔드 A 이슈 #4](https://github.com/RTAman/TEACHMi/issues/4)의 구현입니다. 이메일·비밀번호 가입과 쿠키 로그인, 가입 없이 체험하는 게스트 로그인, 파일 업로드(PDF·PPT·PPTX)·분석·재시도와 직접 입력 자료, 개념 후보 추가·수정, B가 정의한 `CurrentMember`·`ConceptSource`·`LearningSourceReader` 연결을 제공합니다.
 
 - 요청·응답 명세: [api/auth-materials.openapi.json](api/auth-materials.openapi.json) (`AuthMaterialsOpenApiContractTest`가 실제 응답과 대조)
 - 프론트 연동 가이드: [AUTH_API_HANDOFF.md](AUTH_API_HANDOFF.md)
@@ -13,8 +13,11 @@
 | CSRF | 로그인 상태의 POST·PUT·PATCH·DELETE는 `X-CSRF-Token` 헤더가 필요합니다. 값은 로그인 응답이나 `GET /auth/me`의 `csrfToken`입니다. 없거나 틀리면 `403 CSRF_TOKEN_INVALID` |
 | 저장 | 이메일은 소문자로 정규화해 고유 제약을 둡니다. 비밀번호는 BCrypt, 인증 토큰은 SHA-256 해시만 DB에 저장합니다 |
 | 만료·폐기 | 만료되거나 로그아웃한 쿠키로 보호 API를 부르면 401입니다. 학습 데이터는 그대로 남습니다 |
+| 게스트 | `POST /auth/guest`가 임시 계정(`guest-<id>@guest.teachmi.invalid`, 아무도 모르는 임의 비밀번호의 BCrypt)을 만들고 로그인과 같은 쿠키를 발급합니다. 일반 가입은 이 도메인을 `422 INVALID_EMAIL`로 거절합니다. B·C에는 일반 회원과 똑같은 `CurrentMember`입니다 |
 
 프론트는 `fetch(..., { credentials: 'include' })`로 쿠키를 보내고, 앱을 열 때 `GET /auth/me`로 로그인 상태와 `csrfToken`을 받아 변경 요청 헤더에 넣습니다.
+
+게스트 생성은 서비스 전체에서 1시간에 `AUTH_GUEST_MAX_PER_HOUR`개(기본 100)로 제한합니다. 프론트(Vercel)가 `/api`를 대신 전달해 사용자 IP를 믿을 수 없으므로 IP별이 아니라 전체 개수로 막습니다. 넘으면 `429 TOO_MANY_GUESTS`입니다. `AUTH_GUEST_ENABLED=false`로 끄면 `404 GUEST_LOGIN_DISABLED`입니다. 게스트도 회원별 AI 하루 한도와 서비스 전체 AI 한도를 그대로 적용받습니다. 게스트 계정과 자료는 자동으로 지우지 않습니다.
 
 로그인 실패 제한은 단일 서버 메모리 방식이며, 만료 항목은 다음 요청에서 이메일 키까지 정리합니다. 저장 한도는 최대 10,000개 이메일이고 동시 실패의 개별 큐도 설정된 실패 횟수만 보관합니다. 모든 슬롯이 아직 유효하면 새로운 이메일 시도는 429로 제한하고 기존 이메일의 제한을 제거하지 않습니다. 만료 또는 성공 로그인 초기화로 슬롯이 비면 다시 허용합니다. 여러 서버에서는 기존 안내대로 공유 DB/Redis 방식이 필요합니다.
 
@@ -23,8 +26,9 @@
 | 요청 | 성공 | 실패 |
 | --- | --- | --- |
 | `POST /api/v1/auth/signup` `{email, password}` | `201 {id, email}`. 로그인시키지 않음 | 형식 `422 INVALID_EMAIL`·`INVALID_PASSWORD`(8~64자), 중복 `409 EMAIL_ALREADY_REGISTERED` |
-| `POST /api/v1/auth/login` `{email, password}` | `200 {id, email, csrfToken, expiresAt}` + Set-Cookie | 미등록·비밀번호 오류 모두 `401 INVALID_CREDENTIALS`, 15분에 5회 실패하면 `429 TOO_MANY_LOGIN_ATTEMPTS` |
-| `GET /api/v1/auth/me` | `200 {id, email, csrfToken}` | `401 UNAUTHENTICATED` |
+| `POST /api/v1/auth/login` `{email, password}` | `200 {id, email, guest, csrfToken, expiresAt}` + Set-Cookie | 미등록·비밀번호 오류 모두 `401 INVALID_CREDENTIALS`, 15분에 5회 실패하면 `429 TOO_MANY_LOGIN_ATTEMPTS` |
+| `POST /api/v1/auth/guest` (본문 없음) | `201 {id, email, guest: true, csrfToken, expiresAt}` + Set-Cookie | 1시간 한도 초과 `429 TOO_MANY_GUESTS`, 꺼짐 `404 GUEST_LOGIN_DISABLED` |
+| `GET /api/v1/auth/me` | `200 {id, email, guest, csrfToken}` | `401 UNAUTHENTICATED` |
 | `POST /api/v1/auth/logout` (CSRF 헤더) | `204`, 서버 세션 폐기 + 쿠키 삭제 | CSRF 누락 `403` |
 
 오류 본문은 `{"code": "...", "message": "..."}`입니다.
@@ -121,7 +125,7 @@ $auth = @{ BaseUri = [uri]'http://localhost:8080'; WebSession = $web; AuthHeader
 
 ## 배포 검수
 
-배포한 서버에 [api/Test-AuthMaterialsDeployment.ps1](api/Test-AuthMaterialsDeployment.ps1)을 실행하면 A파트 항목 24개를 한 번에 확인합니다. Windows PowerShell 5.1과 PowerShell 7(Windows·macOS·Linux)에서 동작합니다.
+배포한 서버에 [api/Test-AuthMaterialsDeployment.ps1](api/Test-AuthMaterialsDeployment.ps1)을 실행하면 A파트 항목 25개(게스트 로그인 포함)를 한 번에 확인합니다. 실행할 때마다 테스트 계정 두 개와 게스트 계정 하나가 생깁니다. Windows PowerShell 5.1과 PowerShell 7(Windows·macOS·Linux)에서 동작합니다.
 
 ```powershell
 cd backend

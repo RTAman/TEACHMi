@@ -82,7 +82,7 @@ class AuthMaterialsOpenApiContractTest {
                                 .forEach(verb -> implemented.add(verb.name() + " " + path)));
                     }
                 });
-        assertThat(documented).hasSize(9).isEqualTo(implemented);
+        assertThat(documented).hasSize(10).isEqualTo(implemented);
 
         var schemas = json.readTree(Files.readString(SPEC)).path("components").path("schemas");
         String views = "com.teachmi.backend.material.MaterialViews$";
@@ -111,6 +111,8 @@ class AuthMaterialsOpenApiContractTest {
                 .content(credentials("flow@example.com")), 201, true);
         var member = login("flow@example.com");
         exchange(withMember(get("/api/v1/auth/me"), member, false), 200, true);
+        var guest = exchange(post("/api/v1/auth/guest"), 201, true);
+        assertThat(guest.path("guest").asBoolean()).isTrue();
 
         var material = exchange(withMember(post("/api/v1/materials"), member, true).header("Idempotency-Key", "m1")
                 .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(Map.of(
@@ -188,7 +190,7 @@ class AuthMaterialsOpenApiContractTest {
     @Test
     void theValidatorRejectsUndocumentedOrMissingFields() {
         String path = "/api/v1/auth/me";
-        String valid = "{\"id\":\"" + UUID.randomUUID() + "\",\"email\":\"a@example.com\",\"csrfToken\":\"t\"}";
+        String valid = "{\"id\":\"" + UUID.randomUUID() + "\",\"email\":\"a@example.com\",\"guest\":false,\"csrfToken\":\"t\"}";
         assertThat(validator.validateResponse(path, Request.Method.GET, response(200, valid)).hasErrors()).isFalse();
         assertThat(validator.validateResponse(path, Request.Method.GET,
                 response(200, valid.replace("}", ",\"extra\":1}"))).hasErrors()).isTrue();

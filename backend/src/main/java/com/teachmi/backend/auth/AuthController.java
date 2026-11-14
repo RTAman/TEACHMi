@@ -30,9 +30,9 @@ class AuthController {
 
     record MemberView(String id, String email) {}
 
-    record LoginView(String id, String email, String csrfToken, String expiresAt) {}
+    record LoginView(String id, String email, boolean guest, String csrfToken, String expiresAt) {}
 
-    record MeView(String id, String email, String csrfToken) {}
+    record MeView(String id, String email, boolean guest, String csrfToken) {}
 
     @PostMapping("/signup")
     ResponseEntity<MemberView> signup(@Valid @RequestBody Credentials request) {
@@ -43,20 +43,31 @@ class AuthController {
 
     @PostMapping("/login")
     ResponseEntity<LoginView> login(@Valid @RequestBody Credentials request) {
-        var login = auth.login(request.email(), request.password());
-        var cookie = cookie(login.token(), properties.sessionTtl().toSeconds());
-        return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE, cookie.toString())
-                .cacheControl(CacheControl.noStore())
-                .body(new LoginView(login.member().id().toString(), login.member().email(), login.csrfToken(),
-                        login.expiresAt().toInstant().toString()));
+        return issued(ResponseEntity.ok(), auth.login(request.email(), request.password()));
+    }
+
+    /** 가입 없이 체험: 임시 계정을 만들고 로그인과 같은 쿠키·csrfToken을 발급한다. */
+    @PostMapping("/guest")
+    ResponseEntity<LoginView> guest() {
+        return issued(ResponseEntity.created(URI.create("/api/v1/auth/me")), auth.guest());
     }
 
     @GetMapping("/me")
     ResponseEntity<MeView> me(HttpServletRequest request) {
         var member = AuthenticatedMember.require(request);
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(new MeView(member.userId().toString(), member.email(), member.csrfToken()));
+                .body(new MeView(member.userId().toString(), member.email(), AuthService.isGuest(member.email()),
+                        member.csrfToken()));
+    }
+
+    private ResponseEntity<LoginView> issued(ResponseEntity.BodyBuilder response, AuthService.Login login) {
+        var cookie = cookie(login.token(), properties.sessionTtl().toSeconds());
+        var member = login.member();
+        return response
+                .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                .cacheControl(CacheControl.noStore())
+                .body(new LoginView(member.id().toString(), member.email(), AuthService.isGuest(member.email()),
+                        login.csrfToken(), login.expiresAt().toInstant().toString()));
     }
 
     @PostMapping("/logout")

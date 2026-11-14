@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LoginThrottleTest {
     private final TestClock clock = new TestClock();
     private final AuthProperties properties = new AuthProperties("TEACHMI_SESSION", true, "Lax",
-            Duration.ofDays(7), 5, Duration.ofMinutes(15));
+            Duration.ofDays(7), 5, Duration.ofMinutes(15), true, 100);
 
     @Test void expiredEmailsAreRemovedEvenWhenTheyAreNeverRequestedAgain() {
         var throttle = new LoginThrottle(properties, clock, 2);

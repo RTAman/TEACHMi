@@ -9,6 +9,7 @@
 | 스플래시 | `GET /api/v1/auth/me` | 200 → 홈, 401 → 로그인 |
 | 회원가입 | `POST /api/v1/auth/signup` | 201 → 로그인 화면 (자동 로그인 안 됨) |
 | 이메일 로그인 | `POST /api/v1/auth/login` | 200 → 홈 |
+| 게스트로 시작하기 (가입 없이 체험) | `POST /api/v1/auth/guest` | 201 → 홈 |
 | 마이페이지 로그아웃 | `POST /api/v1/auth/logout` | 204 → 로그인 화면 |
 | S02-1 파일 업로드 | `POST /api/v1/materials` (multipart) | 202 → S02-2 분석 중 |
 | S02-2 분석 중 | `GET /api/v1/materials/{materialId}`를 2초 간격 | `done` → S02-4, `failed` → S02-3 |
@@ -21,7 +22,7 @@
 ## 2. 꼭 지켜야 할 규칙 4가지
 
 1. **쿠키를 보낸다.** 로그인은 `TEACHMI_SESSION` HttpOnly 쿠키입니다. JS에서 읽을 수 없고 읽을 필요도 없습니다. 모든 요청에 `credentials: 'include'`를 넣습니다.
-2. **변경 요청에 CSRF 헤더를 넣는다.** 로그인한 상태의 POST·PUT·PATCH·DELETE는 `X-CSRF-Token` 헤더가 필요합니다. B·C API도 마찬가지입니다. 값은 로그인 응답과 `/auth/me` 응답의 `csrfToken`입니다. 메모리(상태값)에 두고, 새로고침으로 사라지면 `/auth/me`로 다시 받습니다. 회원가입·로그인 요청에는 필요 없습니다.
+2. **변경 요청에 CSRF 헤더를 넣는다.** 로그인한 상태의 POST·PUT·PATCH·DELETE는 `X-CSRF-Token` 헤더가 필요합니다. B·C API도 마찬가지입니다. 값은 로그인 응답과 `/auth/me` 응답의 `csrfToken`입니다. 메모리(상태값)에 두고, 새로고침으로 사라지면 `/auth/me`로 다시 받습니다. 회원가입·로그인·게스트 로그인 요청에는 필요 없습니다.
 3. **생성 요청에 Idempotency-Key를 넣는다.** 자료 생성·개념 추가는 `Idempotency-Key` 헤더가 필수입니다. 버튼을 누를 때 `crypto.randomUUID()`로 만들고, 네트워크 오류로 **같은 요청을 다시 보낼 때는 같은 키**를 씁니다. 그래야 자료가 두 번 생기지 않습니다.
 4. **같은 사이트에서 호출한다.** 프론트와 백엔드 주소가 다르면 쿠키가 전달되지 않습니다. 개발 중에는 개발 서버 프록시, 배포에서는 Vercel rewrite로 `/api`를 백엔드로 넘깁니다(5장).
 
@@ -65,7 +66,7 @@ export async function api<T>(path: string, init: RequestInit & { idempotencyKey?
 
 ```ts
 try {
-  const me = await api<{ id: string; email: string; csrfToken: string }>('/auth/me');
+  const me = await api<{ id: string; email: string; guest: boolean; csrfToken: string }>('/auth/me');
   setCsrfToken(me.csrfToken);
   // 홈으로
 } catch {
@@ -91,7 +92,7 @@ await api('/auth/signup', { method: 'POST', body: JSON.stringify({ email, passwo
 ### 로그인
 
 ```ts
-const login = await api<{ id: string; email: string; csrfToken: string; expiresAt: string }>(
+const login = await api<{ id: string; email: string; guest: boolean; csrfToken: string; expiresAt: string }>(
   '/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
 setCsrfToken(login.csrfToken);
 // 홈으로
@@ -103,6 +104,27 @@ setCsrfToken(login.csrfToken);
 | `TOO_MANY_LOGIN_ATTEMPTS` (429) | 15분 안에 5번 실패 | 잠시 후 다시 시도해 주세요 |
 
 로그인은 7일 유지됩니다. 만료되면 어떤 API든 401이 오니 로그인 화면으로 보내 주세요.
+
+### 게스트로 시작하기 (가입 없이 체험)
+
+심사·체험용입니다. 로그인 화면에 **"게스트로 시작하기"** 버튼을 두고, 누르면 아래처럼 호출합니다. 요청 본문과 CSRF 헤더는 필요 없습니다.
+
+```ts
+const guest = await api<{ id: string; email: string; guest: boolean; csrfToken: string; expiresAt: string }>(
+  '/auth/guest', { method: 'POST' });
+setCsrfToken(guest.csrfToken);
+// 홈으로. 이후 API 호출은 일반 로그인과 똑같습니다.
+```
+
+- 응답은 로그인과 같고 `guest: true`이며 상태 코드는 `201`입니다. `email`은 `guest-…@guest.teachmi.invalid` 형태의 내부 값이니 **화면에 보여주지 말고** "게스트"로 표시하세요. `/auth/me`도 `guest`를 돌려줍니다.
+- 버튼을 누를 때마다 **새 임시 계정**이 만들어지고, 게스트끼리 자료는 서로 보이지 않습니다.
+- 로그아웃하거나 쿠키가 사라지면 그 게스트 계정으로 다시 들어갈 수 없습니다. 마이페이지에서 게스트에게는 "로그아웃하면 기록이 사라져요" 같은 안내를 권장합니다.
+- 게스트 계정을 일반 회원으로 바꾸는 기능은 없습니다. 기록을 남기려면 회원가입 후 이용해야 합니다.
+
+| code | 상황 | 안내 문구 예시 |
+| --- | --- | --- |
+| `TOO_MANY_GUESTS` (429) | 1시간 동안 만들 수 있는 게스트 수(기본 100)를 넘음 | 체험 접속이 많아요. 잠시 후 다시 시도하거나 회원가입해 주세요 |
+| `GUEST_LOGIN_DISABLED` (404) | 서버에서 게스트 로그인을 끈 경우 | 회원가입 후 이용해 주세요 |
 
 ### 로그아웃 (마이페이지)
 
