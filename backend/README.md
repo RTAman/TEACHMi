@@ -79,6 +79,8 @@ C의 평가·리포트 DB 저장과 B의 report·completed 상태를 함께 전�
 
 ## DB 변경과 빌드
 
+채점 타임아웃 후 사용자가 동일 답안을 한 번 재채점하는 흐름은 [사용자 확인 재채점](GRADING_RECOVERY.md)과 [추가 OpenAPI](api/grading-recovery.openapi.json)를 확인하세요. 기존 uncertain 기록은 보존하며, 사용자 확인·동일 요청 검증·남은 한도 없이 추가 호출하지 않습니다.
+
 프론트·A·C 인수인계는 [B API 명세와 실행 예시](API_HANDOFF.md)를 확인하세요. [OpenAPI JSON](api/openapi.json)과 실제 인증 정보를 전달받는 PowerShell 요청 도구를 제공하며, 명세·HTTP 응답 및 예제 도구를 CI에서 검증합니다.
 
 서버 시작 시 Flyway가 `src/main/resources/db/migration/`의 SQL을 순서대로 적용합니다. V1은 업무 테이블을 담을 `teachmi` 스키마를 만듭니다. 새 테이블은 `teachmi.테이블명`으로 지정하고 `V2__create_users.sql` 같은 새 파일에 작성합니다. 다음 버전 번호와 병합 순서는 PR에서 C와 맞추고, 적용된 SQL은 새 버전으로 수정합니다. Hibernate는 엔티티와 실제 스키마가 일치하는지 검사합니다.

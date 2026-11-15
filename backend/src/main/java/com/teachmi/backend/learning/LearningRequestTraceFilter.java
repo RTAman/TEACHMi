@@ -30,6 +30,11 @@ public class LearningRequestTraceFilter extends OncePerRequestFilter {
     @Override protected void doFilterInternal(HttpServletRequest request,HttpServletResponse response,FilterChain chain)
             throws ServletException,IOException {
         String previous=MDC.get(CONTEXT);
+        String oldApproval=com.teachmi.backend.learning.gemini.ApprovedRecoveryContext.raw();
+        String path=request.getRequestURI().substring(request.getContextPath().length());
+        com.teachmi.backend.learning.gemini.ApprovedRecoveryContext.set("POST".equals(request.getMethod())
+                && path.matches("/api/v1/sessions/[0-9a-f-]{36}/problems/[0-9a-f-]{36}/attempts")
+                ?request.getHeader(com.teachmi.backend.learning.gemini.ApprovedRecoveryContext.HEADER):null);
         String requestId=UUID.randomUUID().toString();
         long started=System.nanoTime();
         response.setHeader(HEADER,requestId);
@@ -43,6 +48,7 @@ public class LearningRequestTraceFilter extends OncePerRequestFilter {
             LOG.info("Learning request requestId={} httpStatus={} elapsedMs={}",requestId,completed?Integer.toString(response.getStatus()):"unresolved",
                     java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started));
             if(previous==null) MDC.remove(CONTEXT); else MDC.put(CONTEXT,previous);
+            com.teachmi.backend.learning.gemini.ApprovedRecoveryContext.set(oldApproval);
         }
     }
 

@@ -11,9 +11,9 @@ record GeminiSettings(String apiKey, String model, Duration connectTimeout, Dura
                 env.getProperty("teachmi.gemini.model", ""),
                 Duration.ofSeconds(number(env, "connect-timeout-seconds", 3, 1, 10)),
                 Duration.ofSeconds(number(env, "request-timeout-seconds", 40, 1, 60)),
-                number(env, "requests-per-minute", 10, 1, 1000),
-                number(env, "requests-per-day", 100, 1, 10000),
-                number(env, "member-requests-per-day", 20, 1, 1000),
+                number(env, "requests-per-minute", 20, 1, 1000),
+                number(env, "requests-per-day", 500, 1, 10000),
+                number(env, "member-requests-per-day", 100, 1, 1000),
                 number(env, "max-attempts", 2, 1, 3),
                 number(env, "max-source-chars", 16000, 100, 100000),
                 number(env, "max-output-tokens", 2048, 256, 8192));

@@ -1,0 +1,357 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "TEACHMi owner-confirmed grading recovery",
+    "version": "1.0.0",
+    "description": "Additive recovery contract. No AI calls on GET or consent. After explicit consent, resubmit the exact stored body and Idempotency-Key to the existing C attempts POST with X-Teachmi-Recovery-Authorization. That POST retains its existing 201 contract. No automatic retries. One additional dispatch per original uncertain generation within existing limits."
+  },
+  "paths": {
+    "/api/v1/sessions/{sessionId}/grading-recovery": {
+      "get": {
+        "operationId": "getGradingRecovery",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "No-store, owner-only saved answer and retry availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradingRecovery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sessions/{sessionId}/grading-recovery/consent": {
+      "post": {
+        "operationId": "consentGradingRecovery",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "attemptId",
+                  "acceptDuplicateCall"
+                ],
+                "properties": {
+                  "attemptId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "acceptDuplicateCall": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Consent only: no provider reservation or dispatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "authorizationId"
+                  ],
+                  "properties": {
+                    "authorizationId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON"
+          },
+          "401": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Owner authentication, CSRF or recovery guard rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Failure"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "GradingRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "review_required",
+              "retry_available",
+              "running",
+              "exhausted",
+              "result_available",
+              "completed"
+            ]
+          },
+          "retryAllowed": {
+            "type": "boolean"
+          },
+          "authorizationId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time"
+          },
+          "attemptId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "problemId": {
+            "type": "string",
+            "format": "uuid",
+            "nullable": true
+          },
+          "savedSubmission": {
+            "$ref": "#/components/schemas/SavedSubmission"
+          },
+          "problems": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "required": [
+          "state",
+          "retryAllowed",
+          "authorizationId",
+          "expiresAt",
+          "attemptId",
+          "problemId",
+          "savedSubmission",
+          "problems"
+        ]
+      },
+      "SavedSubmission": {
+        "type": "object",
+        "nullable": true,
+        "additionalProperties": false,
+        "required": [
+          "answer",
+          "work",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "work": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "problemId",
+          "sequence",
+          "question"
+        ],
+        "properties": {
+          "problemId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sequence": {
+            "type": "integer",
+            "enum": [
+              1,
+              2
+            ]
+          },
+          "question": {
+            "type": "string"
+          }
+        }
+      },
+      "Failure": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "recovery": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "stage": {
+                "type": "string"
+              },
+              "diagnosticCode": {
+                "type": "string"
+              },
+              "retryAllowed": {
+                "type": "boolean"
+              },
+              "action": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

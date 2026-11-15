@@ -78,8 +78,13 @@ final class GeminiGenerationService {
         };
         var historical=previous==null?List.<Previous<T>>of():List.of(new Previous<T>(version(previous),
                 chunks -> request(previous,chunks,selection.concept()), responseValidator(previous,validator,List.of())));
+        java.util.UUID attempt=null;
+        if("assessment/grade".equals(request.operation()) && request.input().path("attemptId").isString()) {
+            try { attempt=java.util.UUID.fromString(request.input().path("attemptId").asText()); }
+            catch(IllegalArgumentException invalid) { throw ApprovedGradingRecovery.denied(); }
+        }
         return execute(request.scope(),version(request),composer,
-                result -> responseValidator(request,validator,candidates.get()).validate(result),historical);
+                result -> responseValidator(request,validator,candidates.get()).validate(result),historical,AS_IS,attempt);
     }
 
     private <T> void validateRequest(Request request,Validator<T> validator) {
@@ -158,6 +163,10 @@ final class GeminiGenerationService {
     }
     private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,
                           List<Previous<T>> previous,Resolver resolver) {
+        return execute(scope,version,composer,validator,previous,resolver,null);
+    }
+    private <T> T execute(Scope scope,String version,Function<List<LearningSourceReader.Chunk>,String> composer,Validator<T> validator,
+                          List<Previous<T>> previous,Resolver resolver,java.util.UUID attempt) {
         var reader=sources.getIfAvailable();
         if(reader==null) throw new LearningException(503,"LEARNING_SOURCE_INTEGRATION_PENDING","A의 자료 소유권 검증·원문 조회 연결이 필요합니다.");
         if(settings.apiKey().isBlank() || !settings.model().matches("[A-Za-z0-9][A-Za-z0-9._-]{0,99}")) {
@@ -167,6 +176,10 @@ final class GeminiGenerationService {
                 scope.sourceChunkIds()),settings.maxSourceChars());
         var request=composer.apply(chunks);
         var key=hash(version+"\n"+settings.model()+"\n"+request);
+        if(attempt!=null) {
+            String restored=ledger.recoveredSuccess(key,scope.memberId(),scope.sessionId(),attempt);
+            if(restored!=null) return cached(restored,chunks,validator,resolver);
+        }
         if(!previous.isEmpty()) {
             String saved=ledger.succeeded(key,scope.memberId(),scope.sessionId());
             if(saved!=null) return cached(saved,chunks,validator,resolver);
@@ -185,8 +198,16 @@ final class GeminiGenerationService {
         String cached;
         int outputTokens=json.readTree(request).path("generationConfig").path("maxOutputTokens").asInt(settings.maxOutputTokens());
         int inputBytes=request.getBytes(StandardCharsets.UTF_8).length;
-        try { cached=outputTokens==settings.maxOutputTokens()?ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes)
-                :ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes,outputTokens); }
+        boolean approved=false;
+        try {
+            var authorization=ApprovedRecoveryContext.requested();
+            if(authorization!=null) {
+                if(attempt==null) throw ApprovedGradingRecovery.denied();
+                var receipt=ledger.claimApproved(authorization,key,scope.memberId(),scope.sessionId(),attempt,inputBytes,outputTokens);
+                key=receipt.key();cached=receipt.cached();approved=true;
+            } else cached=outputTokens==settings.maxOutputTokens()?ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes)
+                    :ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes,outputTokens);
+        }
         catch(LearningException failure) {
             LOG.warn("Gemini stage=LEDGER_CLAIM code={}",failure.code());
             GeminiGenerationLog.event("LEDGER_CLAIM",failure.code(),scope,version,key,settings,inputBytes,outputTokens);
@@ -216,7 +237,7 @@ final class GeminiGenerationService {
             GeminiGenerationLog.event("RESPONSE_VALIDATION",diagnostic,scope,version,key,settings,inputBytes,outputTokens);
             fail(key,false,0,diagnostic);
             boolean exhausted;
-            try { exhausted=ledger.failedAtLimit(key); }
+            try { exhausted=approved || ledger.failedAtLimit(key); }
             catch(RuntimeException unavailable) {
                 throw GeminiDiagnostics.uncertain("LEDGER_FAILURE_WRITE","LEDGER_FAILURE_STATUS_READ_FAILED",
                         "생성 시도 상태 확인이 필요합니다. 자동 재호출하지 마세요.");

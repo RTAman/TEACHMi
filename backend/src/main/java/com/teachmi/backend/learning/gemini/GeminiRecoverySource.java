@@ -14,7 +14,7 @@ final class GeminiRecoverySource implements LearningGenerationRecoverySource {
 
     @Override public GenerationRecovery unresolved(String memberId,UUID sessionId) {
         var rows=jdbc.queryForList("SELECT state,last_error_code,lease_until>now() AS leased "
-                +"FROM teachmi.learning_ai_generation WHERE member_id=? AND session_id=? "
+                +"FROM teachmi.unresolved_ai_generation WHERE member_id=? AND session_id=? "
                 +"AND state IN ('uncertain','running') "
                 +"ORDER BY CASE WHEN state='uncertain' THEN 0 WHEN lease_until<=now() THEN 1 ELSE 2 END,updated_at LIMIT 1",
                 memberId,sessionId);

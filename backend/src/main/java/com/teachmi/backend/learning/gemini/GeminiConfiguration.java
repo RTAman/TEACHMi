@@ -20,6 +20,8 @@ public class GeminiConfiguration {
         var settings=GeminiSettings.from(environment);
         LOG.info("Gemini limits requestTimeoutMs={} connectTimeoutMs={} maxOutputTokens={}",
                 settings.requestTimeout().toMillis(),settings.connectTimeout().toMillis(),settings.maxOutputTokens());
+        LOG.info("Gemini quotas requestsPerMinute={} requestsPerDay={} memberRequestsPerDay={} maxAttempts={}",
+                settings.requestsPerMinute(),settings.requestsPerDay(),settings.memberRequestsPerDay(),settings.maxAttempts());
         if(settings.requestTimeout().toSeconds()<40) {
             LOG.warn("Gemini diagnostic=REQUEST_TIMEOUT_BELOW_OPERATIONAL_BASELINE requestTimeoutMs={} baselineMs=40000; explicit settings are preserved",
                     settings.requestTimeout().toMillis());
@@ -33,8 +35,9 @@ public class GeminiConfiguration {
                 ? new GeminiHttpTransport(settings)
                 : request -> { throw new GeminiCallFailure(false, 503, "GEMINI_CONFIGURATION_REQUIRED", 0); };
     }
-    @Bean(destroyMethod = "close") GeminiLedger geminiLedger(DataSourceProperties database, GeminiSettings settings) {
-        return new GeminiLedger(database, settings);
+    @Bean(destroyMethod = "close") GeminiLedger geminiLedger(DataSourceProperties database, GeminiSettings settings,Environment environment) {
+        return new GeminiLedger(database, settings,
+                environment.getProperty("teachmi.gemini.user-grading-recovery-enabled",Boolean.class,true));
     }
     @Bean GeminiGenerationService geminiGenerationService(GeminiSettings settings,
             ObjectProvider<LearningSourceReader> sources, GeminiTransport transport,
