@@ -70,7 +70,7 @@ class GeminiContentIntegrationTest {
         doAnswer(call -> new ReteachProblemSource.Target(call.getArgument(0), call.getArgument(1),
                 call.getArgument(2), call.getArgument(3), "wrong", "정액법에서 사용 기간에 배분하는 이유"))
                 .when(problems).loadWrongAttempt(anyString(), org.mockito.ArgumentMatchers.any(UUID.class), anyString(), anyString());
-        mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        mvc = MockMvcBuilders.webAppContextSetup(context).addFilters(new LearningRequestTraceFilter()).build();
         doAnswer(call -> {
             var request = json.readTree(call.getArgument(0, String.class));
             var data = json.readTree(request.path("contents").get(0).path("parts").get(0).path("text").asText());
@@ -827,6 +827,77 @@ class GeminiContentIntegrationTest {
         assertThatThrownBy(() -> generator.summarize(content)).isInstanceOf(LearningException.class);
         assertThatThrownBy(() -> generator.summarize(content)).hasMessageContaining("자동 재호출");
         verify(transport).generate(anyString());
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void summaryTimeoutHasASupportReferenceAndDeadlineChangesCannotReopenIt(
+            org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT"))
+                .when(transport).generate(anyString());
+        var failed=mvc.perform(put("/api/v1/sessions/"+id+"/mode").principal(() -> "u1")
+                .header("Idempotency-Key","summary-timeout").contentType("application/json")
+                .content("{\"mode\":\"first\",\"expectedVersion\":0}")).andReturn().getResponse();
+        assertThat(failed.getStatus()).isEqualTo(503);
+        var body=json.readTree(failed.getContentAsByteArray());
+        assertThat(body.path("recovery").path("action").asText()).isEqualTo("review_required");
+        assertThat(body.path("recovery").path("retryAllowed").asBoolean()).isFalse();
+        assertThat(body.path("message").asText()).doesNotContain("저장");
+        String reference=failed.getHeader(LearningRequestTraceFilter.HEADER);
+        assertThat(UUID.fromString(reference).toString()).isEqualTo(reference);
+        assertThat(output.getAll()).contains("requestId="+reference,"sessionId="+id,
+                "promptVersion="+GeminiContentGenerator.SUMMARY_VERSION,"stage=TRANSPORT")
+                .doesNotContain("unit-test-key",GeminiFixtures.SOURCE);
+        var receipt=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var callRows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_call");
+        for(String key:List.of("summary-timeout","different-key")) {
+            assertThat(mvc.perform(put("/api/v1/sessions/"+id+"/mode").principal(() -> "u1")
+                    .header("Idempotency-Key",key).contentType("application/json")
+                    .content("{\"mode\":\"first\",\"expectedVersion\":0}")).andReturn().getResponse().getStatus()).isEqualTo(503);
+        }
+        var changed=new GeminiSettings(settings.apiKey(),settings.model(),settings.connectTimeout(),java.time.Duration.ofSeconds(55),
+                settings.requestsPerMinute(),settings.requestsPerDay(),settings.memberRequestsPerDay(),settings.maxAttempts(),
+                settings.maxSourceChars(),settings.maxOutputTokens());
+        var content=new LearningContentGenerator.Context("u1",UUID.fromString(id),"m01","c01","first",GeminiFixtures.concept(),null);
+        var resumed=new GeminiContentGenerator(changed,context.getBeanProvider(LearningSourceReader.class),transport,ledger,json);
+        assertThatThrownBy(() -> resumed.summarize(content)).isInstanceOf(LearningException.class);
+        assertThat(new GeminiRecoverySource(jdbc).unresolved("u1",UUID.fromString(id)).action()).isEqualTo("review_required");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(receipt);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_call")).isEqualTo(callRows);
+        assertThat(callRows).hasSize(1);
+        verify(transport,times(1)).generate(anyString());
+    }
+
+    @Test void changingOnlyTheDeadlineReusesSuccessfulSummaryWithoutAReservation() {
+        var content=GeminiFixtures.context("u1");
+        var summary=generator.summarize(content);
+        var receipt=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var callRows=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_call");
+        var changed=new GeminiSettings(settings.apiKey(),settings.model(),settings.connectTimeout(),java.time.Duration.ofSeconds(55),
+                settings.requestsPerMinute(),settings.requestsPerDay(),settings.memberRequestsPerDay(),settings.maxAttempts(),
+                settings.maxSourceChars(),settings.maxOutputTokens());
+        var resumed=new GeminiContentGenerator(changed,context.getBeanProvider(LearningSourceReader.class),transport,ledger,json);
+        assertThat(resumed.summarize(content)).isEqualTo(summary);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(receipt);
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_call")).isEqualTo(callRows);
+        verify(transport,times(1)).generate(anyString());
+    }
+
+    @Test void operatorInspectionReadsOnlyMetadataAndPreservesTheUncertainReceipt() throws Exception {
+        var content=GeminiFixtures.context("u1");
+        ledger.claim("inspection-fixture",content,500);
+        ledger.fail("inspection-fixture",true,0,"TRANSPORT_REQUEST_TIMEOUT");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        String script=java.nio.file.Files.readString(java.nio.file.Path.of("api/Inspect-LearningRecovery.sql"));
+        assertThat(script).contains("BEGIN READ ONLY").doesNotContain("SELECT *","UPDATE ","DELETE ","INSERT ");
+        String sql=script.lines().filter(line -> !line.startsWith("\\")).collect(java.util.stream.Collectors.joining("\n"))
+                .replace(":'session_id'","'"+content.sessionId()+"'");
+        try(var connection=java.sql.DriverManager.getConnection(database.getUrl(),database.getUsername(),database.getPassword());
+            var statement=connection.createStatement()) {
+            statement.execute(sql);
+        }
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        verifyNoInteractions(transport);
     }
 
     @Test

@@ -4,6 +4,8 @@
 
 ## 배포 대상과 남은 준비
 
+Render에서 이미 운영 중인 서버의 제한 설정·문의 번호·읽기 전용 원장 확인은 [Gemini 타임아웃 대응](../GEMINI_TIMEOUT_RECOVERY.md)을 따른다. 아래 OCI 구성은 별도의 배포 패키지 계획이며 현재 Render 설정을 자동으로 바꾸는 절차가 아니다. 기본 Gemini 요청 제한은 40초로 맞추지만 기존에 명시한 20초 값은 유지되므로 실제 시작 로그에서 적용값을 확인한다. 설정/코드 변경·배포가 기존 uncertain 보류를 해제하지 않는다.
+
 사용자가 선택한 OCI 홈 리전은 **일본 도쿄(ap-tokyo-1)**다. 제안 사양은 Ubuntu 24.04 ARM64 / Ampere A1 / 2 OCPU / RAM 6GB / 부트 볼륨 50GB의 단일 VM이다. 실제 무료 대상·계정 전체 사용량·도쿄의 A1 잔여 용량을 생성 화면에서 다시 확인한다. 무료 자원은 용량 부족이나 유휴 인스턴스 회수 가능성이 있으므로 DB 백업은 다른 위치에도 보관한다. [OCI Always Free 공식 조건](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
 
 서버·도메인·TLS·실제 브라우저는 아직 검증 대상이다. 이 저장소에는 배포할 프론트엔드 빌드가 없다. 승인 후 동일 도메인용 빌드를 `backend/deploy/frontend/`에 별도 전달해야 한다. 현재 이 디렉터리는 비어 있어 `/`가 404를 반환한다. 프론트엔드 API 기본 경로는 `/api/v1`, 쿠키 요청은 같은 출처로 구성한다.

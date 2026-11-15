@@ -8,6 +8,8 @@ B 연결은 [HTTP 명세·실행 예시·인계 안내](../backend/API_HANDOFF.m
 
 ## B AI 복구 화면 규칙
 
+요약/첫 질문 준비 중에는 아직 사용자 답변이 없을 수 있으므로 저장 완료를 단정하는 문구를 쓰지 않습니다. 오류 응답의 선택적 `X-Teachmi-Request-Id`를 문의 번호로 표시하고, 모드/요약 화면에서는 진입 시 GET으로 서버 상태를 확인한 뒤 생성 버튼을 활성화합니다. 확인 대기·한도 도달 상태에서는 버튼과 모드 변경을 차단하며, '저장 상태 확인'은 GET만 수행하고 자동 생성하지 않습니다. 자세한 설정 대조·읽기 전용 원장 확인은 [타임아웃 대응](../backend/GEMINI_TIMEOUT_RECOVERY.md)을 참고하세요.
+
 클라이언트 구현 시 [로딩과 확인 대기 구분](../backend/CONVERSATION_TURNS.md#로딩과-확인-대기-구분)을 적용합니다. availableActions=wait은 로딩 여부가 아닙니다. 오류/GET의 recovery.action과 pendingTurn·activeReteach.errorCode를 먼저 검사합니다.
 
 ```js

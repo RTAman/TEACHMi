@@ -109,6 +109,13 @@ class GeminiHttpTransportTest {
         var error = catchThrowableOfType(() -> client(Duration.ofSeconds(2)).generate("{}"), GeminiCallFailure.class);
         assertThat(error.uncertain).isTrue();
         assertThat(error.diagnostic).isEqualTo("UPSTREAM_HTTP_503");
+        assertThat(requests.get()).isEqualTo(1);
+    }
+
+    @Test void delayedHeadersWithinTheConfiguredDeadlineSucceedWithoutRetry() {
+        delayMillis=600;
+        assertThat(client(Duration.ofSeconds(2)).generate("{}")).isEqualTo("{}");
+        assertThat(requests.get()).isEqualTo(1);
     }
 
     @Test void deadlineIncludesAStalledBodyAfterHeadersWereReceived(CapturedOutput output) {

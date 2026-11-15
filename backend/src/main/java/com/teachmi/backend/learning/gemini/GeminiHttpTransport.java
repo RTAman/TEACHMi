@@ -40,9 +40,10 @@ final class GeminiHttpTransport implements GeminiTransport {
         var trace=new Trace();
         try { return send(requestJson,trace); }
         catch(GeminiCallFailure failure) {
-            LOG.warn("Gemini transport diagnostic={} phase={} elapsedMs={} httpStatus={} responseBytes={}",
+            LOG.warn("Gemini transport diagnostic={} phase={} elapsedMs={} httpStatus={} responseBytes={} requestTimeoutMs={} requestId={}",
                     GeminiDiagnostics.safe(failure.diagnostic),trace.failurePhase==null?trace.phase:trace.failurePhase,
-                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-trace.started),trace.status,trace.received.get());
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-trace.started),trace.status,trace.received.get(),
+                    settings.requestTimeout().toMillis(),com.teachmi.backend.learning.LearningRequestTraceFilter.currentRequestId());
             throw failure;
         }
     }

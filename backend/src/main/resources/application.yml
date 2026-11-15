@@ -49,7 +49,7 @@ teachmi:
     api-key: ${GEMINI_API_KEY:}
     model: ${GEMINI_MODEL:}
     connect-timeout-seconds: ${GEMINI_CONNECT_TIMEOUT_SECONDS:3}
-    request-timeout-seconds: ${GEMINI_REQUEST_TIMEOUT_SECONDS:20}
+    request-timeout-seconds: ${GEMINI_REQUEST_TIMEOUT_SECONDS:40}
     requests-per-minute: ${GEMINI_REQUESTS_PER_MINUTE:10}
     requests-per-day: ${GEMINI_REQUESTS_PER_DAY:100}
     member-requests-per-day: ${GEMINI_MEMBER_REQUESTS_PER_DAY:20}

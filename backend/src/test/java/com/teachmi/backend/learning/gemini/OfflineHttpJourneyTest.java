@@ -500,6 +500,9 @@ class OfflineHttpJourneyTest {
             gateway.fault.set("timeout");
             var modeTimeout=exchange(modeFault,"PUT",path(ms)+"/mode",Map.of("mode","first","expectedVersion",0),UUID.randomUUID().toString(),true);
             check("B mode timeout is initially held",modeTimeout.status()==503 && modeTimeout.body().path("recovery").path("action").asText().equals("review_required"));
+            check("B mode error has a server support reference",modeTimeout.headers().firstValue("X-Teachmi-Request-Id")
+                    .filter(value -> value.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")).isPresent());
+            check("B mode error does not claim a saved learner answer",!modeTimeout.body().path("message").asText().contains("저장"));
             var modeHeld=state(modeFault,ms);
             observations.add(Map.of("kind","B-mode-uncertain-session-restore","hasRecovery",modeHeld.has("recovery"),
                     "actions",json.convertValue(modeHeld.path("availableActions"),List.class)));
