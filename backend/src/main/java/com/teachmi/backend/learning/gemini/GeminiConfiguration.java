@@ -15,8 +15,16 @@ import tools.jackson.databind.ObjectMapper;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(name = "teachmi.gemini.enabled", havingValue = "true")
 public class GeminiConfiguration {
+    private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(GeminiConfiguration.class);
     @Bean GeminiSettings geminiSettings(Environment environment) {
-        return GeminiSettings.from(environment);
+        var settings=GeminiSettings.from(environment);
+        LOG.info("Gemini limits requestTimeoutMs={} connectTimeoutMs={} maxOutputTokens={}",
+                settings.requestTimeout().toMillis(),settings.connectTimeout().toMillis(),settings.maxOutputTokens());
+        if(settings.requestTimeout().toSeconds()<40) {
+            LOG.warn("Gemini diagnostic=REQUEST_TIMEOUT_BELOW_OPERATIONAL_BASELINE requestTimeoutMs={} baselineMs=40000; explicit settings are preserved",
+                    settings.requestTimeout().toMillis());
+        }
+        return settings;
     }
     @Bean @ConditionalOnMissingBean(GeminiTransport.class)
     GeminiTransport geminiTransport(GeminiSettings settings) {

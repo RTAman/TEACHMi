@@ -189,6 +189,7 @@ final class GeminiGenerationService {
                 :ledger.claim(key,scope.memberId(),scope.sessionId(),inputBytes,outputTokens); }
         catch(LearningException failure) {
             LOG.warn("Gemini stage=LEDGER_CLAIM code={}",failure.code());
+            GeminiGenerationLog.event("LEDGER_CLAIM",failure.code(),scope,version,key,settings,inputBytes,outputTokens);
             throw failure;
         }
         if(cached!=null) {
@@ -197,19 +198,22 @@ final class GeminiGenerationService {
         String payload;
         T result;
         try {
+            GeminiGenerationLog.event("DISPATCH","AI_GENERATION_IN_PROGRESS",scope,version,key,settings,inputBytes,outputTokens);
             payload=extract(transport.generate(request));
             result=validate(payload,chunks,validator,resolver);
         } catch(GeminiCallFailure failure) {
             String detail=GeminiDiagnostics.safe(failure.diagnostic);
             LOG.warn("Gemini stage=TRANSPORT diagnostic={}",detail);
+            GeminiGenerationLog.event("TRANSPORT",detail,scope,version,key,settings,inputBytes,outputTokens);
             fail(key,failure.uncertain,failure.retrySeconds,detail);
             var recovery=failure.uncertain?GenerationRecovery.review("TRANSPORT",detail)
                     :new GenerationRecovery("TRANSPORT",detail,false,failure.status==429?"wait":"check_configuration");
             throw new LearningException(failure.status,failure.code,failure.uncertain?
-                    "생성 응답을 확인하지 못했습니다. 답변을 다시 보내기 전에 호출 결과를 확인하세요.":"Gemini 호출을 완료하지 못했습니다.",null,recovery);
+                    "AI 생성 결과 확인이 필요합니다. 다시 요청하지 말고 지원 담당자에게 문의하세요.":"Gemini 호출을 완료하지 못했습니다.",null,recovery);
         } catch(RuntimeException invalid) {
             var diagnostic=diagnostic(invalid);
             LOG.warn("Gemini stage=RESPONSE_VALIDATION diagnostic={}",diagnostic);
+            GeminiGenerationLog.event("RESPONSE_VALIDATION",diagnostic,scope,version,key,settings,inputBytes,outputTokens);
             fail(key,false,0,diagnostic);
             boolean exhausted;
             try { exhausted=ledger.failedAtLimit(key); }
