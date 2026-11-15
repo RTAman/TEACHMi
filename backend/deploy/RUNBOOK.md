@@ -41,7 +41,7 @@ sudoedit /etc/teachmi/production.env
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` |
 | `GEMINI_CONNECT_TIMEOUT_SECONDS`, `GEMINI_REQUEST_TIMEOUT_SECONDS` | `3`, `40` |
 | `GEMINI_MAX_OUTPUT_TOKENS`, `GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS` | C/전역 `6144`, B 상한 `2048` |
-| `GEMINI_REQUESTS_PER_MINUTE`, `GEMINI_REQUESTS_PER_DAY`, `GEMINI_MEMBER_REQUESTS_PER_DAY` | `10`, `100`, `20`; 공유 원장 기반 요청 한도이며 금액 한도가 아님 |
+| `GEMINI_REQUESTS_PER_MINUTE`, `GEMINI_REQUESTS_PER_DAY`, `GEMINI_MEMBER_REQUESTS_PER_DAY` | `15`, `500`, `100`; 공유 원장 기반 요청 한도이며 금액 한도가 아님 |
 | `GEMINI_MAX_ATTEMPTS` | `2`; uncertain을 자동 재시도하도록 허용하는 설정이 아님 |
 
 운영 도구는 부모 셸의 Gemini·DB·COMPOSE 설정을 제거한 환경으로 Compose를 호출한다. `docker compose config` 원문에는 비밀 값이 들어갈 수 있으므로 공개하지 않는다. 대신 다음 검증의 안전한 요약만 사용한다. 이 검증은 DNS·실제 이미지·서버 접속 성공을 보장하지 않는다.
@@ -125,6 +125,8 @@ sudo python3 deploy/ops.py --env-file /etc/teachmi/production.env --project teac
 ## 502·503·uncertain 대응과 프론트 계약
 
 `availableActions=wait`만 보고 무한 로딩을 유지하지 않는다. 구조화된 `recovery`와 안전한 오류 코드를 함께 해석하며 자동으로 변경 요청을 재전송하지 않는다. 자세한 필드는 [B 연동 안내](../API_HANDOFF.md), [공통 Gemini 포트](../COMMON_GEMINI_PORT.md)를 기준으로 한다.
+
+최신 미채점 C 답안에는 [사용자 확인 재채점](../GRADING_RECOVERY.md) 예외가 추가됐다. 운영자 승인 없이 사용자가 추가 AI 사용량 안내를 확인하고 동일 답안으로 별도 실행 1회를 선택할 수 있다. 기존 원장·요청 한도는 보존하며, 일반 요청이나 설정 변경만으로 uncertain을 해제하지 않는다. 이 기능은 V15와 새 프론트 연동이 함께 필요하다. B 대화와 C 문제 생성의 보류에는 적용하지 않는다.
 
 | 상태 | 프론트/운영자 조치 |
 | --- | --- |

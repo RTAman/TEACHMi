@@ -16,7 +16,7 @@ import uuid
 HERE = Path(__file__).resolve().parent
 COMPOSE = HERE / "compose.production.yaml"
 KEYS = set("""APP_IMAGE APP_REVISION TEACHMI_DOMAIN ACME_EMAIL DB_NAME DB_ADMIN_PASSWORD DB_PASSWORD
-GEMINI_ENABLED GEMINI_API_KEY GEMINI_MODEL GEMINI_CONNECT_TIMEOUT_SECONDS GEMINI_REQUEST_TIMEOUT_SECONDS
+GEMINI_ENABLED GEMINI_USER_GRADING_RECOVERY_ENABLED GEMINI_API_KEY GEMINI_MODEL GEMINI_CONNECT_TIMEOUT_SECONDS GEMINI_REQUEST_TIMEOUT_SECONDS
 GEMINI_MAX_OUTPUT_TOKENS GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS GEMINI_REQUESTS_PER_MINUTE GEMINI_REQUESTS_PER_DAY
 GEMINI_MEMBER_REQUESTS_PER_DAY GEMINI_MAX_ATTEMPTS GEMINI_MAX_SOURCE_CHARS AUTH_COOKIE_SECURE AUTH_COOKIE_SAME_SITE
 AUTH_SESSION_TTL AUTH_LOGIN_MAX_FAILURES AUTH_LOGIN_FAILURE_WINDOW ASSESSMENT_DEMO_ENABLED MATERIAL_MAX_FILE_SIZE""".split())
@@ -67,10 +67,18 @@ def validate_values(values: dict[str, str]) -> None:
         raise OpsError("GEMINI_ENABLED must be true or false.")
     if values.get("GEMINI_ENABLED") == "true" and (not values.get("GEMINI_API_KEY") or values["GEMINI_API_KEY"].startswith(("REPLACE", "CHANGE"))):
         raise OpsError("AI is enabled but its server key is missing.")
+    if values.get("GEMINI_USER_GRADING_RECOVERY_ENABLED", "true") not in ("true", "false"):
+        raise OpsError("GEMINI_USER_GRADING_RECOVERY_ENABLED must be true or false.")
+    # Application quotas are configurable; keep explicit older limits and enforce bounded integers.
+    for key, default, maximum in (("GEMINI_REQUESTS_PER_MINUTE", 15, 1000),
+                                   ("GEMINI_REQUESTS_PER_DAY", 500, 10000),
+                                   ("GEMINI_MEMBER_REQUESTS_PER_DAY", 100, 1000)):
+        value = str(values.get(key, default))
+        if not re.fullmatch(r"[0-9]+", value) or not 1 <= int(value) <= maximum:
+            raise OpsError(f"{key} must be a bounded positive integer.")
     pinned = {"GEMINI_MODEL": "gemini-3.1-flash-lite", "GEMINI_REQUEST_TIMEOUT_SECONDS": "40",
               "GEMINI_MAX_OUTPUT_TOKENS": "6144", "GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS": "2048",
-              "GEMINI_REQUESTS_PER_MINUTE": "10", "GEMINI_REQUESTS_PER_DAY": "100",
-              "GEMINI_MEMBER_REQUESTS_PER_DAY": "20", "GEMINI_MAX_ATTEMPTS": "2"}
+              "GEMINI_MAX_ATTEMPTS": "2"}
     for key, expected in pinned.items():
         if values.get(key, expected) != expected:
             raise OpsError(f"{key} differs from the verified baseline; review a separate configuration change.")

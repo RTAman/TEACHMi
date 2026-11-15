@@ -19,8 +19,13 @@ public class GeminiLedger implements AutoCloseable {
     private final GeminiSettings settings;
     private final HikariDataSource pool;
     private final TransactionTemplate transaction;
+    private final ApprovedGradingRecovery gradingRecovery;
 
     GeminiLedger(DataSourceProperties database, GeminiSettings settings) {
+        this(database,settings,false);
+    }
+
+    GeminiLedger(DataSourceProperties database, GeminiSettings settings,boolean recoveryEnabled) {
         this.pool = database.initializeDataSourceBuilder().type(HikariDataSource.class).build();
         pool.setPoolName("GeminiLedger");
         pool.setMaximumPoolSize(2);
@@ -30,6 +35,15 @@ public class GeminiLedger implements AutoCloseable {
         this.transaction = new TransactionTemplate(new DataSourceTransactionManager(pool));
         transaction.setTimeout(5);
         this.settings = settings;
+        this.gradingRecovery=new ApprovedGradingRecovery(jdbc,settings,recoveryEnabled);
+    }
+
+    String recoveredSuccess(String key,String member,UUID session,UUID attempt) {
+        return gradingRecovery.cached(key,member,session,attempt);
+    }
+    ApprovedGradingRecovery.Claim claimApproved(UUID approval,String key,String member,UUID session,UUID attempt,int bytes,int tokens) {
+        if(tokens<256 || tokens>settings.maxOutputTokens()) throw new IllegalArgumentException("Invalid output reservation");
+        return transaction.execute(status -> gradingRecovery.claim(approval,key,member,session,attempt,bytes,tokens,() -> checkQuotas(member)));
     }
 
     public String claim(String key, Context context, int inputBytes) {
@@ -72,7 +86,7 @@ public class GeminiLedger implements AutoCloseable {
         }
         // Prompt/model/output-limit changes create new hashes. They must not bypass an unresolved call.
         // Read only: historical uncertain and expired running receipts are never rewritten/reclaimed here.
-        var unresolved=jdbc.queryForList("SELECT state,last_error_code,lease_until>now() AS leased FROM teachmi.learning_ai_generation "
+        var unresolved=jdbc.queryForList("SELECT state,last_error_code,lease_until>now() AS leased FROM teachmi.unresolved_ai_generation "
                 +"WHERE member_id=? AND session_id=? AND state IN ('uncertain','running') "
                 +"ORDER BY CASE WHEN state='uncertain' THEN 0 ELSE 1 END,updated_at LIMIT 1",memberId,sessionId);
         if(!unresolved.isEmpty()) {
@@ -84,19 +98,7 @@ public class GeminiLedger implements AutoCloseable {
             throw GeminiDiagnostics.uncertain("LEDGER_CLAIM","uncertain".equals(old.get("state"))?(String)old.get("last_error_code"):"GENERATION_LEASE_EXPIRED",
                     "이 학습에 확인되지 않은 호출이 있습니다. 설정을 바꿔 재호출하지 말고 결과를 먼저 확인하세요.");
         }
-        var counts = jdbc.queryForMap("""
-                SELECT count(*) AS day_count,
-                       count(*) FILTER (WHERE member_id=?) AS member_count
-                FROM teachmi.learning_ai_call WHERE attempted_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
-                """, memberId);
-        // Include the previous day's last minute at UTC midnight.
-        long minute = jdbc.queryForObject(
-                "SELECT count(*) FROM teachmi.learning_ai_call WHERE attempted_at > now()-interval '1 minute'", Long.class);
-        if (minute >= settings.requestsPerMinute()
-                || ((Number) counts.get("day_count")).longValue() >= settings.requestsPerDay()
-                || ((Number) counts.get("member_count")).longValue() >= settings.memberRequestsPerDay()) {
-            throw new LearningException(429, "AI_USAGE_LIMIT", "학습 콘텐츠 요청 한도에 도달했습니다.");
-        }
+        checkQuotas(memberId);
         jdbc.update("""
                 INSERT INTO teachmi.learning_ai_generation
                     (generation_key,member_id,session_id,state,attempts,lease_until,retry_after,updated_at)
@@ -111,6 +113,22 @@ public class GeminiLedger implements AutoCloseable {
                 VALUES (?,?,?,now(),?,?)
                 """, UUID.randomUUID(), key, memberId, inputBytes, outputTokens);
         return null;
+    }
+
+    private void checkQuotas(String memberId) {
+        var counts = jdbc.queryForMap("""
+                SELECT count(*) AS day_count,
+                       count(*) FILTER (WHERE member_id=?) AS member_count
+                FROM teachmi.learning_ai_call WHERE attempted_at >= date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+                """, memberId);
+        // Include the previous day's last minute at UTC midnight.
+        long minute = jdbc.queryForObject(
+                "SELECT count(*) FROM teachmi.learning_ai_call WHERE attempted_at > now()-interval '1 minute'", Long.class);
+        if (minute >= settings.requestsPerMinute()
+                || ((Number) counts.get("day_count")).longValue() >= settings.requestsPerDay()
+                || ((Number) counts.get("member_count")).longValue() >= settings.memberRequestsPerDay()) {
+            throw new LearningException(429, "AI_USAGE_LIMIT", "학습 콘텐츠 요청 한도에 도달했습니다.");
+        }
     }
 
     public void succeed(String key, String contentJson) {

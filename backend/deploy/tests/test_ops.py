@@ -20,6 +20,16 @@ def values():
             "AUTH_COOKIE_SECURE": "true", "AUTH_COOKIE_SAME_SITE": "Lax", "ASSESSMENT_DEMO_ENABLED": "false"}
 
 class SafetyTests(unittest.TestCase):
+    def test_application_quota_increase_keeps_old_limits_and_validates_recovery_switch(self):
+        for minute, day, member in ((15, 500, 100), (10, 100, 20)):
+            config = values() | {"GEMINI_REQUESTS_PER_MINUTE": str(minute), "GEMINI_REQUESTS_PER_DAY": str(day),
+                                 "GEMINI_MEMBER_REQUESTS_PER_DAY": str(member), "GEMINI_USER_GRADING_RECOVERY_ENABLED": "false"}
+            ops.validate_values(config)
+        for field, invalid in (("GEMINI_REQUESTS_PER_MINUTE", "0"), ("GEMINI_REQUESTS_PER_DAY", "10001"),
+                               ("GEMINI_MEMBER_REQUESTS_PER_DAY", "many"), ("GEMINI_USER_GRADING_RECOVERY_ENABLED", "yes")):
+            with self.assertRaises(ops.OpsError):
+                ops.validate_values(values() | {field: invalid})
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

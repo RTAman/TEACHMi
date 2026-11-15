@@ -24,9 +24,9 @@ A의 `MaterialLearningSources`가 `LearningSourceReader`를 구현합니다. 직
 | GEMINI_MODEL | 빈 값 | 계정에서 generateContent를 지원하는 모델 ID |
 | GEMINI_CONNECT_TIMEOUT_SECONDS | 3 | 연결 제한, 1~10초 |
 | GEMINI_REQUEST_TIMEOUT_SECONDS | 40 | 연결·헤더·전체 본문 완료까지의 단일 제한, 1~60초. 명시적 설정은 유지 |
-| GEMINI_REQUESTS_PER_MINUTE | 10 | 동일 DB를 쓰는 앱 전체의 최근 1분 호출 한도 |
-| GEMINI_REQUESTS_PER_DAY | 100 | 앱 전체 UTC 날짜별 호출 한도 |
-| GEMINI_MEMBER_REQUESTS_PER_DAY | 20 | 회원별 UTC 날짜별 호출 한도 |
+| GEMINI_REQUESTS_PER_MINUTE | 15 | 동일 DB를 쓰는 앱 전체의 최근 1분 호출 한도 |
+| GEMINI_REQUESTS_PER_DAY | 500 | 앱 전체 UTC 날짜별 호출 한도 |
+| GEMINI_MEMBER_REQUESTS_PER_DAY | 100 | 회원별 UTC 날짜별 호출 한도 |
 | GEMINI_MAX_ATTEMPTS | 2 | 같은 콘텐츠의 명시적 생성 시도 한도, 최대 3 |
 | GEMINI_MAX_SOURCE_CHARS | 16000 | 실제 원문의 글자 수 상한 |
 | GEMINI_MAX_OUTPUT_TOKENS | 2048 | 전역 최대 출력 토큰, 최대 8192 |
