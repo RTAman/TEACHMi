@@ -51,7 +51,7 @@ teachmi:
     model: ${GEMINI_MODEL:}
     connect-timeout-seconds: ${GEMINI_CONNECT_TIMEOUT_SECONDS:3}
     request-timeout-seconds: ${GEMINI_REQUEST_TIMEOUT_SECONDS:40}
-    requests-per-minute: ${GEMINI_REQUESTS_PER_MINUTE:20}
+    requests-per-minute: ${GEMINI_REQUESTS_PER_MINUTE:15}
     requests-per-day: ${GEMINI_REQUESTS_PER_DAY:500}
     member-requests-per-day: ${GEMINI_MEMBER_REQUESTS_PER_DAY:100}
     max-attempts: ${GEMINI_MAX_ATTEMPTS:2}

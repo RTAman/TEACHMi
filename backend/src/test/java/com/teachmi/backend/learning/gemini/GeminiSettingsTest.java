@@ -15,7 +15,7 @@ class GeminiSettingsTest {
     @Test void largerApplicationQuotasMatchYamlAndPreserveExplicitOlderLimits() throws Exception {
         var env=new MockEnvironment();
         var defaults=GeminiSettings.from(env);
-        assertThat(defaults.requestsPerMinute()).isEqualTo(20);
+        assertThat(defaults.requestsPerMinute()).isEqualTo(15);
         assertThat(defaults.requestsPerDay()).isEqualTo(500);
         assertThat(defaults.memberRequestsPerDay()).isEqualTo(100);
         for(var source:new YamlPropertySourceLoader().load("application",new ClassPathResource("application.yml")))

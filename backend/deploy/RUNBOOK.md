@@ -41,7 +41,7 @@ sudoedit /etc/teachmi/production.env
 | `GEMINI_MODEL` | `gemini-3.1-flash-lite` |
 | `GEMINI_CONNECT_TIMEOUT_SECONDS`, `GEMINI_REQUEST_TIMEOUT_SECONDS` | `3`, `40` |
 | `GEMINI_MAX_OUTPUT_TOKENS`, `GEMINI_INTERACTIVE_MAX_OUTPUT_TOKENS` | C/전역 `6144`, B 상한 `2048` |
-| `GEMINI_REQUESTS_PER_MINUTE`, `GEMINI_REQUESTS_PER_DAY`, `GEMINI_MEMBER_REQUESTS_PER_DAY` | `20`, `500`, `100`; 공유 원장 기반 요청 한도이며 금액 한도가 아님 |
+| `GEMINI_REQUESTS_PER_MINUTE`, `GEMINI_REQUESTS_PER_DAY`, `GEMINI_MEMBER_REQUESTS_PER_DAY` | `15`, `500`, `100`; 공유 원장 기반 요청 한도이며 금액 한도가 아님 |
 | `GEMINI_MAX_ATTEMPTS` | `2`; uncertain을 자동 재시도하도록 허용하는 설정이 아님 |
 
 운영 도구는 부모 셸의 Gemini·DB·COMPOSE 설정을 제거한 환경으로 Compose를 호출한다. `docker compose config` 원문에는 비밀 값이 들어갈 수 있으므로 공개하지 않는다. 대신 다음 검증의 안전한 요약만 사용한다. 이 검증은 DNS·실제 이미지·서버 접속 성공을 보장하지 않는다.

@@ -70,7 +70,7 @@ def validate_values(values: dict[str, str]) -> None:
     if values.get("GEMINI_USER_GRADING_RECOVERY_ENABLED", "true") not in ("true", "false"):
         raise OpsError("GEMINI_USER_GRADING_RECOVERY_ENABLED must be true or false.")
     # Application quotas are configurable; keep explicit older limits and enforce bounded integers.
-    for key, default, maximum in (("GEMINI_REQUESTS_PER_MINUTE", 20, 1000),
+    for key, default, maximum in (("GEMINI_REQUESTS_PER_MINUTE", 15, 1000),
                                    ("GEMINI_REQUESTS_PER_DAY", 500, 10000),
                                    ("GEMINI_MEMBER_REQUESTS_PER_DAY", 100, 1000)):
         value = str(values.get(key, default))
