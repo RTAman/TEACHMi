@@ -8,6 +8,26 @@ final class GeminiGenerationLog {
     private static final org.slf4j.Logger LOG=org.slf4j.LoggerFactory.getLogger(GeminiGenerationService.class);
     private GeminiGenerationLog() {}
 
+    static void citationCounts(String payload,tools.jackson.databind.ObjectMapper json) {
+        if(payload==null) return;
+        tools.jackson.databind.JsonNode response;
+        try { response=json.readTree(payload); }
+        catch(RuntimeException invalid) { return; }
+        if(response==null) return;
+        var sources=response.path("sourceChunkIds");
+        var evidence=response.path("evidence");
+        var citations=response.path("citations");
+        var seen=new java.util.HashSet<String>();
+        int repeated=0;
+        if(evidence.isArray()) for(var entry:evidence) {
+            var id=entry.path("sourceChunkId");
+            if(id.isString() && !seen.add(id.asText())) repeated++;
+        }
+        LOG.info("Gemini citation cardinality requestId={} sourceCount={} evidenceCount={} repeatedEvidenceSourceCount={} candidateCount={}",
+                LearningRequestTraceFilter.currentRequestId(),sources.isArray()?sources.size():-1,
+                evidence.isArray()?evidence.size():-1,repeated,citations.isArray()?citations.size():-1);
+    }
+
     static void event(String stage,String diagnostic,Scope scope,String version,String key,
                       GeminiSettings settings,int inputBytes,int outputTokens) {
         var parts=version.split("\n",-1);

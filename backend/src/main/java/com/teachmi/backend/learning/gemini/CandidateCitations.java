@@ -62,6 +62,23 @@ final class CandidateCitations {
         return ids;
     }
 
+    /** New common-port wire schema. Domain consumers still receive grounded sourceChunkIds/evidence. */
+    static JsonNode schema(JsonNode domain, int count, ObjectMapper json) {
+        var schema = (ObjectNode) domain.deepCopy();
+        ((ObjectNode) schema.path("properties")).set(FIELD, json.valueToTree(Map.of(
+                "type", "array", "minItems", 1, "maxItems", Math.min(MAX_CITATIONS, count),
+                "items", Map.of("type", "string", "enum", ids(count)))));
+        ((tools.jackson.databind.node.ArrayNode) schema.path("required")).add(FIELD);
+        return schema;
+    }
+
+    static JsonNode resolveNumbered(JsonNode raw, List<LearningSourceReader.Chunk> chunks, ObjectMapper json) {
+        if (raw == null || !raw.isObject() || !raw.has(FIELD)) {
+            throw new GeminiResponseFailure("CITATION_IDS_MISSING");
+        }
+        return resolve(raw, chunks, json);
+    }
+
     /**
      * citations 형식의 응답을 sourceChunkIds·evidence 형식으로 바꾼다.
      * 이전 형식(sourceChunkIds·evidence만 있는 응답)은 그대로 두고 기존 검증에 맡긴다.

@@ -45,7 +45,7 @@ final class OfflineHttpTransport implements GeminiTransport {
         String quote=source.substring(0,"long-grade-quote".equals(injection)?42:"long-quote".equals(injection)?41:20);
         if(injection==null && !data.path("citationCandidates").isEmpty())
             quote=data.path("citationCandidates").get(0).path("quote").asText();
-        if(operation.startsWith("assessment/")) {
+        if(operation.startsWith("assessment/") && !request.path("generationConfig").path("responseJsonSchema").path("properties").has("citations")) {
             if(data.path("citationCandidates").isEmpty()) throw new AssertionError("C operations require authorized literal candidates");
             var quotes=request.path("generationConfig").path("responseJsonSchema").path("properties").path("evidence")
                     .path("items").path("properties").path("quote");
@@ -54,12 +54,12 @@ final class OfflineHttpTransport implements GeminiTransport {
         }
         if("bad-quote".equals(injection)) quote="실제 원문과 일치하지 않는 인용문입니다.";
         var offered=data.path("citationCandidates");
-        if(injection==null && !operation.startsWith("assessment/") && offered.path(0).has("id")) {
-            // B requests now ask for candidate ids; the server attaches the literal quote and source.
+        if((injection==null || "too-many-citations".equals(injection)) && offered.path(0).has("id")) {
+            // Numbered requests let the server attach the literal quote and source.
             String chosen=offered.get(0).path("id").asText();
             for(var candidate:offered) if(candidate.path("sourceChunkId").asText().equals(id)) { chosen=candidate.path("id").asText(); break; }
             output.remove("sourceChunkIds");
-            output.put("citations",List.of(chosen));
+            output.put("citations","too-many-citations".equals(injection)?List.of("c01","c02","c03"):List.of(chosen));
         } else {
             output.put("evidence",List.of(Map.of("sourceChunkId",id,"quote",quote)));
         }
