@@ -55,11 +55,15 @@ public class GeminiLedger implements AutoCloseable {
     }
 
     String claim(String key,String memberId,UUID sessionId,int inputBytes,int outputTokens) {
-        if(outputTokens<256 || outputTokens>settings.maxOutputTokens()) throw new IllegalArgumentException("Invalid output reservation");
-        return transaction.execute(status -> claimInside(key, memberId, sessionId, inputBytes,outputTokens));
+        return claim(key,memberId,sessionId,inputBytes,outputTokens,java.util.List.of());
     }
 
-    private String claimInside(String key, String memberId, UUID sessionId, int inputBytes,int outputTokens) {
+    String claim(String key,String memberId,UUID sessionId,int inputBytes,int outputTokens,java.util.List<String> previousKeys) {
+        if(outputTokens<256 || outputTokens>settings.maxOutputTokens()) throw new IllegalArgumentException("Invalid output reservation");
+        return transaction.execute(status -> claimInside(key, memberId, sessionId, inputBytes,outputTokens,previousKeys));
+    }
+
+    private String claimInside(String key, String memberId, UUID sessionId, int inputBytes,int outputTokens,java.util.List<String> previousKeys) {
         // Serialize project-wide quota reservations across all backend instances sharing this DB.
         jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtextextended('teachmi:gemini:quota',0))");
         var rows = jdbc.queryForList("SELECT *, lease_until > now() AS leased, retry_after > now() AS cooling "
@@ -97,6 +101,13 @@ public class GeminiLedger implements AutoCloseable {
             }
             throw GeminiDiagnostics.uncertain("LEDGER_CLAIM","uncertain".equals(old.get("state"))?(String)old.get("last_error_code"):"GENERATION_LEASE_EXPIRED",
                     "이 학습에 확인되지 않은 호출이 있습니다. 설정을 바꿔 재호출하지 말고 결과를 먼저 확인하세요.");
+        }
+        long currentAttempts=rows.isEmpty()?0:((Number)rows.getFirst().get("attempts")).longValue();
+        var distinctPrevious=previousKeys.stream().filter(old -> !old.equals(key)).distinct().toList();
+        if(!distinctPrevious.isEmpty()
+                && currentAttempts+failedAttempts(distinctPrevious,memberId,sessionId)>=settings.maxAttempts()) {
+            throw new LearningException(429,"AI_ATTEMPT_LIMIT","이 콘텐츠의 생성 시도 한도에 도달했습니다.",null,
+                    new GenerationRecovery("LEDGER_CLAIM","AI_ATTEMPT_LIMIT",false,"limit_reached"));
         }
         checkQuotas(memberId);
         jdbc.update("""
@@ -160,6 +171,27 @@ public class GeminiLedger implements AutoCloseable {
     boolean failedAtLimit(String key) {
         return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM teachmi.learning_ai_generation "
                 +"WHERE generation_key=? AND state='failed' AND attempts>=?)",Boolean.class,key,settings.maxAttempts()));
+    }
+
+    boolean failedAtLimit(String key,java.util.List<String> previousKeys) {
+        if(previousKeys.isEmpty()) return failedAtLimit(key);
+        var current=jdbc.queryForList("SELECT member_id,session_id FROM teachmi.learning_ai_generation WHERE generation_key=? AND state='failed'",key);
+        if(current.isEmpty()) return false;
+        var keys=new java.util.ArrayList<>(previousKeys);
+        keys.add(key);
+        var row=current.getFirst();
+        return failedAttempts(keys,(String)row.get("member_id"),(UUID)row.get("session_id"))>=settings.maxAttempts();
+    }
+
+    private long failedAttempts(java.util.List<String> keys,String member,UUID session) {
+        if(keys.isEmpty()) return 0;
+        var distinct=keys.stream().distinct().toList();
+        var parameters=new java.util.ArrayList<Object>();
+        parameters.add(member);parameters.add(session);parameters.addAll(distinct);
+        var placeholders=String.join(",",java.util.Collections.nCopies(distinct.size(),"?"));
+        return jdbc.queryForObject("SELECT coalesce(sum(attempts),0) FROM teachmi.learning_ai_generation "
+                +"WHERE member_id=? AND session_id=? AND state='failed' AND generation_key IN ("+placeholders+")",
+                Long.class,parameters.toArray());
     }
 
     public void fail(String key, boolean uncertain, int retrySeconds, String reason) {

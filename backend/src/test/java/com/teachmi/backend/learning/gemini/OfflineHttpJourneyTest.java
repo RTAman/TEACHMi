@@ -413,12 +413,12 @@ class OfflineHttpJourneyTest {
             check("turn receipt survives restart without provider request",firstReply.equals(call(member,"POST",path(learning)+"/turns",firstBody,firstKey,200))
                     && gateway.count()==before);
             finishChat(member,learning);
-            gateway.fault.set("long-quote");
+            gateway.fault.set("too-many-citations");
             var cBad=exchange(member,"POST",path(learning)+"/problems",null,null,true);
-            check("C v5 overlong quote rejected",cBad.status()==502 && cBad.body().path("code").asText().equals("INVALID_GEMINI_RESPONSE"));
-            check("C exact validation diagnostic reaches HTTP",cBad.body().path("recovery").path("diagnosticCode").asText().equals("EVIDENCE_QUOTE_TOO_LONG")
+            check("C v6 excess citation selections rejected",cBad.status()==502 && cBad.body().path("code").asText().equals("INVALID_GEMINI_RESPONSE"));
+            check("C exact validation diagnostic reaches HTTP",cBad.body().path("recovery").path("diagnosticCode").asText().equals("CITATION_CARDINALITY_INVALID")
                     && cBad.body().path("recovery").path("retryAllowed").asBoolean());
-            observe("C-intentional-41-character-quote",cBad);
+            observe("C-intentional-excess-citation-selections",cBad);
             observations.add(Map.of("kind","C-validation-ledger-diagnostic","rows",ledger()));
             var problems=call(member,"POST",path(learning)+"/problems",null,null,200);
             check("two independent problems and no answer exposure",problems.path("total").asInt()==2 &&
@@ -526,8 +526,8 @@ class OfflineHttpJourneyTest {
             check("all uncertain receipts retained",ledger.stream().filter(row -> row.get("state").equals("uncertain")).mapToInt(row -> (Integer)row.get("count")).sum()==3);
             check("C grading uses v5 candidates",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/grade"))
                     .allMatch(row -> row.get("promptVersion").equals("v5")));
-            check("C problem generation uses v5 candidates",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/problems"))
-                    .allMatch(row -> row.get("promptVersion").equals("v5")));
+            check("C problem generation uses v6 numbered candidates",gateway.audit.stream().filter(row -> row.get("operation").equals("assessment/problems"))
+                    .allMatch(row -> row.get("promptVersion").equals("v6")));
             check("interactive output budget stays below the global cap",gateway.audit.stream()
                     .filter(row -> List.of("question","dialogue","reteach_question").contains(row.get("operation")))
                     .allMatch(row -> row.get("maxOutputTokens").equals(2048)));

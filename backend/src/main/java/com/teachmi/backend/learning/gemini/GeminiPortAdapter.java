@@ -9,4 +9,7 @@ final class GeminiPortAdapter implements GeminiGenerationPort {
     @Override public <T> T generateWithPreviousSuccess(Request request,Request previous,Validator<T> validator) {
         return service.generateWithPreviousSuccess(request,previous,validator);
     }
+    @Override public <T> T generateWithPreviousSuccesses(Request request,java.util.List<Request> previous,Validator<T> validator) {
+        return service.generateWithPreviousSuccesses(request,previous,validator);
+    }
 }

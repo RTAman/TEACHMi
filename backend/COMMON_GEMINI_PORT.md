@@ -89,7 +89,17 @@ C의 GeminiProblemGenerator와 GeminiAnswerGrader는 모두 v5/SHORT_EXACT로 �
 
 SHORT_EXACT 요청은 A의 실제 소유 원문 조회 이후에만 citationCandidates를 만듭니다. 후보는 원문에 연속해서 존재하는 6~40자이며 조각당 8개, 전체 64개로 제한합니다. 원문·사용자 입력은 변경하지 않습니다. 모델에는 출처 ID와 quote를 함께 선택하도록 지시하고, 생성 스키마에는 후보 인용 enum과 maxLength=40, 후보를 제공한 출처 ID enum을 넣습니다. 서버에서는 기존 정확한 원문 검사 후 후보 ID/인용 쌍을 검사합니다. 40자 초과는 EVIDENCE_QUOTE_TOO_LONG, 원문과 다른 인용은 EVIDENCE_QUOTE_NOT_EXACT, 원문에는 있지만 후보 쌍에 없는 인용은 EVIDENCE_CANDIDATE_INVALID로 구분합니다. 후보가 없으면 호출·예약 전에 중단합니다. C의 문제 생성 출처 1~2개·채점 출처 1개·ID당 evidence 1개 규칙은 그대로 검사합니다.
 
-generateWithPreviousSuccess(current, previous, validator)는 동일 Scope·작업·입력·스키마의 이전 STANDARD 요청 성공만 읽기 전용으로 조회합니다. 이전 요청은 호출하지 않으며 현재 원문과 이전 요청 계약 및 업무 검증기를 모두 다시 적용합니다. 운영 어댑터는 기존 성공 키 조회 경로를 사용합니다. 대체 포트의 기본 메서드는 현재 요청만 처리하므로 테스트 대역도 기존 generate 구현으로 교체할 수 있습니다. C는 v4의 지시·입력·스키마·요청 JSON을 보존하고 v5의 새 후보 정책을 과거 성공 데이터에 소급하지 않습니다. 키 해시 계산식, 공유 사용량 한도, 임대·attempt 제한, uncertain 차단 및 B의 과거 요청/캐시는 변경하지 않습니다. 새 환경 변수와 DB 마이그레이션은 없습니다.
+generateWithPreviousSuccess(current, previous, validator)와 generateWithPreviousSuccesses(current, previousList, validator)는 동일 Scope·작업·입력·스키마의 이전 STANDARD 또는 SHORT_EXACT 성공을 읽기 전용으로 조회합니다. 목록은 최대 8개입니다. 이전 요청을 구성해 원래 키를 조회하고, 현재 원문과 당시 요청 계약 및 업무 검증기를 다시 적용합니다. 대체 포트의 기본 메서드는 현재 요청을 처리하므로 기존 generate 구현으로 교체할 수 있습니다. v4·v5 요청 JSON은 고정된 합성 기준 파일로 검증합니다. 새 환경 변수와 DB 마이그레이션은 없습니다.
+
+### C 문제 생성 v6의 후보 번호
+
+NUMBERED_EXACT는 B의 CandidateCitations를 재사용합니다. 소유권이 검증된 실제 원문에서 결정적으로 후보를 만들고 번호와 원문·출처 ID를 모델에 제공합니다. 출력 스키마는 citations 배열에 후보 번호 enum을 1~2개 요구하며 sourceChunkIds/evidence는 서버가 구성합니다. 같은 번호 중복·없는 번호·기존 출처 필드와의 혼합 응답은 거절합니다. 같은 출처의 서로 다른 후보 두 개를 선택하면 첫 선택 구절 하나를 evidence로 기록합니다. 결과는 GroundedSources, SHORT_EXACT 후보 쌍 검사, 업무 스키마와 C의 CitationRules를 모두 통과해야 합니다.
+
+성공 원장은 모델의 후보 번호 응답을 저장합니다. 재접속 시 동일한 소유 원문에서 출처를 다시 연결하고 검증하며, C의 공개 HTTP 응답과 문항 저장 형식은 sourceChunkIds를 사용합니다. C 채점 v5와 B 기존 요청의 정책은 각각의 기존 경로를 사용합니다.
+
+v6 문제 생성은 동일 입력·모델·출력 설정의 v5·v4 성공을 복원할 수 있습니다. 성공이 없으면 이전 failed attempts와 현재 attempts를 기존 전역 예약 잠금 안에서 합산해 maxAttempts를 검사합니다. 이전 2회 소진은 신규 예약 전에 AI_ATTEMPT_LIMIT/recovery.action=limit_reached로 차단됩니다. 이전 1회와 현재 1회 실패도 마지막 502부터 retryAllowed=false입니다. 이전 원장을 수정하거나 성공 캐시·uncertain을 초기화하지 않습니다. 이미 소진된 학습은 이번 배포만으로 재개되지 않습니다. 모델·출력 설정을 바꾸어 요청을 우회하는 운영 절차도 제공하지 않습니다.
+
+CITATION_CARDINALITY_INVALID의 안전한 로그에는 sourceCount, evidenceCount, repeatedEvidenceSourceCount, candidateCount와 requestId를 추가합니다. 없는 배열은 -1로 표시하며 출처 ID·인용문·답안·응답 전문은 기록하지 않습니다. 같은 출처의 evidence 중복과 후보 번호 개수 초과를 개수만으로 구분할 수 있습니다.
 
 채점의 과거 성공 조회에도 동일 attemptId·문항·정답·풀이 기준·제출 답안과 풀이가 필요합니다. 다른 답안의 성공을 재사용하지 않습니다. correct/wrong/pending_review 판정과 정답을 노출하는 reteachFocus를 가리는 기존 검증은 유지합니다. 미채점 답안이나 실패 원장을 배포 시 초기화하지 않으며, 재시작 시 자동 채점도 하지 않습니다. 실제 API 재제출은 recovery와 별도 실호출 승인을 따릅니다.
 

@@ -13,7 +13,12 @@ public interface GeminiGenerationPort {
         return generate(request, validator);
     }
 
-    enum CitationPolicy { STANDARD, SHORT_EXACT }
+    /** Historical requests are cache lookups only. Implementations must never dispatch them. */
+    default <T> T generateWithPreviousSuccesses(Request request, List<Request> previous, Validator<T> validator) {
+        return generate(request, validator);
+    }
+
+    enum CitationPolicy { STANDARD, SHORT_EXACT, NUMBERED_EXACT }
 
     record Scope(String memberId, UUID sessionId, String materialId, String conceptId, List<String> sourceChunkIds) {
         public Scope { sourceChunkIds = sourceChunkIds == null ? List.of() : List.copyOf(sourceChunkIds); }

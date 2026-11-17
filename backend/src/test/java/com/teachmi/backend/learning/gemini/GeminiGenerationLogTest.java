@@ -12,6 +12,18 @@ import static org.assertj.core.api.Assertions.*;
 
 @ExtendWith(OutputCaptureExtension.class)
 class GeminiGenerationLogTest {
+    @Test void cardinalityDiagnosticsContainCountsWithoutSourceOrResponseText(CapturedOutput output) {
+        var json=tools.jackson.databind.json.JsonMapper.builder().build();
+        GeminiGenerationLog.citationCounts("""
+                {"sourceChunkIds":["source-private"],"evidence":[
+                {"sourceChunkId":"source-private","quote":"lecture-private"},
+                {"sourceChunkId":"source-private","quote":"answer-private"}]}
+                """,json);
+        assertThat(output.getAll()).contains("sourceCount=1","evidenceCount=2","repeatedEvidenceSourceCount=1","candidateCount=-1")
+                .doesNotContain("source-private","lecture-private","answer-private");
+        GeminiGenerationLog.citationCounts("broken-response-private",json);
+        assertThat(output.getAll()).doesNotContain("broken-response-private");
+    }
     @Test void quotaDiagnosticsRemainSpecificAndUnsafeMetadataIsNotLogged(CapturedOutput output) {
         var settings=new GeminiSettings("credential-sentinel","invalid\nmodel-sentinel",Duration.ofSeconds(3),Duration.ofSeconds(40),
                 10,100,20,2,16000,2048);

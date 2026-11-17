@@ -130,6 +130,194 @@ class GeminiCommonPortIntegrationTest {
         }).when(transport).generate(anyString());
     }
     long calls() { return jdbc.queryForObject("SELECT count(*) FROM teachmi.learning_ai_call",Long.class); }
+    Request numberedRequest() {
+        var old=shortRequest();
+        return new Request(scope,old.operation(),"v6",old.instruction(),old.input(),old.schema(),CitationPolicy.NUMBERED_EXACT);
+    }
+    List<Request> problemHistory() {
+        var base=request("assessment/problems");
+        return List.of(shortRequest(),new Request(scope,base.operation(),"v4",base.instruction(),base.input(),base.schema()));
+    }
+    String generateNumbered() {
+        return port.generateWithPreviousSuccesses(numberedRequest(),problemHistory(),node -> node.path("result").asText());
+    }
+    void numberedResponse() {
+        doAnswer(call -> envelope(json.valueToTree(Map.of("result","원가 배분","citations",List.of("c01")))))
+                .when(transport).generate(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void actualCProblemsResolveCandidatesPerSourceAndRestoreWithoutAnotherCall(boolean differentSources) throws Exception {
+        String first=scope.sourceChunkIds().getFirst();
+        String second=UUID.randomUUID().toString();
+        jdbc.update("""
+                INSERT INTO teachmi.source_chunk(id,material_id,analysis_version,seq,location_kind,location_number,text,created_at)
+                VALUES (?::uuid,?::uuid,1,2,'input',2,?,now())
+                """,second,scope.materialId(),"합성 원문에서는 자산의 비용을 사용 기간에 맞추어 나눕니다. 계산 과정과 이유를 함께 설명합니다.");
+        jdbc.update("INSERT INTO teachmi.concept_source(concept_id,chunk_id) VALUES (?::uuid,?::uuid)",scope.conceptId(),second);
+        var concept=new ConceptSource.Snapshot("감가상각","정액법",List.of(first,second));
+        jdbc.update("UPDATE teachmi.learning_session SET concept_snapshot=? WHERE id=?",json.writeValueAsString(concept),scope.sessionId());
+        doAnswer(call -> {
+            var wire=json.readTree(call.getArgument(0,String.class));
+            var schema=wire.path("generationConfig").path("responseJsonSchema");
+            assertThat(schema.path("properties").has("citations")).isTrue();
+            assertThat(schema.path("properties").has("evidence")).isFalse();
+            assertThat(schema.path("properties").has("sourceChunkIds")).isFalse();
+            var data=json.readTree(wire.path("contents").get(0).path("parts").get(0).path("text").asText());
+            var offered=new java.util.ArrayList<JsonNode>();
+            data.path("citationCandidates").forEach(offered::add);
+            var one=offered.getFirst();
+            var two=offered.stream().skip(1).filter(candidate -> differentSources
+                    != candidate.path("sourceChunkId").asText().equals(one.path("sourceChunkId").asText())).findFirst().orElseThrow();
+            var response=json.readTree("""
+                    {"problems":[
+                    {"question":"합성 장비의 연간 비용을 구하고 이유를 설명하세요.","changedConditions":"장비 조건 변경",
+                     "expectedAnswer":"10원","solution":"사용 기간으로 나눕니다.","gradingCriteria":"비용과 배분 이유"},
+                    {"question":"합성 차량의 첫해 비용을 구하고 배분 이유를 설명하세요.","changedConditions":"차량 조건 변경",
+                     "expectedAnswer":"20원","solution":"잔존가치를 고려합니다.","gradingCriteria":"금액과 인식 이유"}]}
+                    """);
+            ((tools.jackson.databind.node.ObjectNode)response).set("citations",json.valueToTree(List.of(one.path("id").asText(),two.path("id").asText())));
+            return envelope(response);
+        }).when(transport).generate(anyString());
+        var generator=context.getBean("geminiProblemGenerator");
+        var generate=generator.getClass().getDeclaredMethod("generate",String.class,SessionView.class);
+        generate.setAccessible(true);
+        var selection=sessions.get(scope.memberId(),scope.sessionId());
+        var drafts=(List<?>)generate.invoke(generator,scope.memberId(),selection);
+        assertThat(drafts).hasSize(2);
+        assertThat(json.valueToTree(drafts).get(0).path("sourceChunkIds")).hasSize(differentSources?2:1);
+        assertThat(generate.invoke(generator,scope.memberId(),selection)).isEqualTo(drafts);
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @ParameterizedTest @CsvSource({"unknown,EVIDENCE_CANDIDATE_INVALID","duplicate,CITATION_ID_DUPLICATE",
+            "mixed,EVIDENCE_STRUCTURE_INVALID","missing,CITATION_IDS_MISSING","too-many,CITATION_CARDINALITY_INVALID"})
+    void numberedCitationsRejectMalformedSelectionsBeforeSuccessCaching(String defect,String diagnostic) {
+        var raw=json.createObjectNode().put("result","원가 배분");
+        raw.set("citations",json.valueToTree(switch(defect) {
+            case "unknown" -> List.of("c99");
+            case "duplicate" -> List.of("c01","c01");
+            case "too-many" -> List.of("c01","c02","c03");
+            default -> List.of("c01");
+        }));
+        if(defect.equals("mixed")) raw.set("sourceChunkIds",json.valueToTree(scope.sourceChunkIds()));
+        if(defect.equals("missing")) raw.remove("citations");
+        doReturn(envelope(raw)).when(transport).generate(anyString());
+        var failure=catchThrowableOfType(this::generateNumbered,LearningException.class);
+        assertThat(failure.recovery().diagnosticCode()).isEqualTo(diagnostic);
+        assertThat(jdbc.queryForMap("SELECT state,content_json FROM teachmi.learning_ai_generation"))
+                .containsEntry("state","failed").containsEntry("content_json",null);
+        assertThat(calls()).isEqualTo(1);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"v4","v5"})
+    void numberedPolicyRestoresEachHistoricalSuccessWithTheOriginalContractAtQuotaLimit(String version) {
+        var old=problemHistory().stream().filter(request -> request.promptVersion().equals(version)).findFirst().orElseThrow();
+        if(version.equals("v5")) shortResponse();
+        assertThat(generate(old)).isEqualTo("원가 배분");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var budget=limits("minute");
+        try(var store=new GeminiLedger(database,budget)) {
+            assertThat(scoped(budget,store).<String>generateWithPreviousSuccesses(numberedRequest(),problemHistory(),
+                    node -> node.path("result").asText())).isEqualTo("원가 배분");
+        }
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @Test void numberedPromptCannotReopenAnExhaustedV5Request() {
+        doReturn("invalid envelope").when(transport).generate(anyString());
+        error(() -> generate(shortRequest()),"INVALID_GEMINI_RESPONSE");
+        error(() -> generate(shortRequest()),"INVALID_GEMINI_RESPONSE");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        var failure=catchThrowableOfType(this::generateNumbered,LearningException.class);
+        assertThat(failure.code()).isEqualTo("AI_ATTEMPT_LIMIT");
+        assertThat(failure.recovery().action()).isEqualTo("limit_reached");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(2);
+        verify(transport,times(2)).generate(anyString());
+    }
+
+    @Test void oneHistoricalFailureLeavesOnlyOneCurrentAttemptAndItsErrorEndsRetryLoading() {
+        doReturn("invalid envelope").when(transport).generate(anyString());
+        error(() -> generate(shortRequest()),"INVALID_GEMINI_RESPONSE");
+        var old=jdbc.queryForMap("SELECT * FROM teachmi.learning_ai_generation");
+        var failure=catchThrowableOfType(this::generateNumbered,LearningException.class);
+        assertThat(failure.recovery().retryAllowed()).isFalse();
+        assertThat(failure.recovery().action()).isEqualTo("limit_reached");
+        error(this::generateNumbered,"AI_ATTEMPT_LIMIT");
+        assertThat(jdbc.queryForMap("SELECT * FROM teachmi.learning_ai_generation WHERE generation_key=?",old.get("generation_key"))).isEqualTo(old);
+        assertThat(calls()).isEqualTo(2);
+        verify(transport,times(2)).generate(anyString());
+    }
+
+    @Test void historicalFailuresAcrossBothVersionsShareTheSameAttemptBudget() {
+        doReturn("invalid envelope").when(transport).generate(anyString());
+        for(var old:problemHistory()) error(() -> generate(old),"INVALID_GEMINI_RESPONSE");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key");
+        error(this::generateNumbered,"AI_ATTEMPT_LIMIT");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation ORDER BY generation_key")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(2);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"uncertain","expired"})
+    void numberedPromptPreservesAndBlocksUnresolvedHistory(String state) {
+        doThrow(new GeminiCallFailure(true,503,"AI_GENERATION_UNCERTAIN",0,"TRANSPORT_REQUEST_TIMEOUT"))
+                .when(transport).generate(anyString());
+        error(() -> generate(shortRequest()),"AI_GENERATION_UNCERTAIN");
+        if(state.equals("expired"))
+            jdbc.update("UPDATE teachmi.learning_ai_generation SET state='running',lease_until=now()-interval '1 second'");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        error(this::generateNumbered,"AI_GENERATION_UNCERTAIN");
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @Test void numberedSuccessIsDurableAndRechecksTheResolvedPayloadWithoutAnotherReservation() {
+        numberedResponse();
+        assertThat(generateNumbered()).isEqualTo("원가 배분");
+        var before=jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation");
+        try(var store=new GeminiLedger(database,settings)) {
+            assertThat(scoped(settings,store).<String>generateWithPreviousSuccesses(numberedRequest(),problemHistory(),
+                    node -> node.path("result").asText())).isEqualTo("원가 배분");
+        }
+        assertThat(jdbc.queryForList("SELECT * FROM teachmi.learning_ai_generation")).isEqualTo(before);
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings={"minute","day","member"})
+    void numberedPolicyKeepsTheSharedUsageLimits(String budgetName) {
+        legacy.summarize(bContext);
+        var budget=limits(budgetName);
+        try(var store=new GeminiLedger(database,budget)) {
+            error(() -> scoped(budget,store).generateWithPreviousSuccesses(numberedRequest(),problemHistory(),node -> node),"AI_USAGE_LIMIT");
+        }
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
+
+    @Test void simultaneousNumberedRequestsDispatchOnce() throws Exception {
+        var started=new CountDownLatch(1);var release=new CountDownLatch(1);
+        doAnswer(call -> {
+            started.countDown();assertThat(release.await(10,TimeUnit.SECONDS)).isTrue();
+            return envelope(json.valueToTree(Map.of("result","원가 배분","citations",List.of("c01"))));
+        }).when(transport).generate(anyString());
+        try(var executor=Executors.newSingleThreadExecutor()) {
+            var first=executor.submit(this::generateNumbered);
+            try {
+                assertThat(started.await(10,TimeUnit.SECONDS)).isTrue();
+                error(this::generateNumbered,"AI_GENERATION_IN_PROGRESS");
+            } finally { release.countDown(); }
+            assertThat(first.get(15,TimeUnit.SECONDS)).isEqualTo("원가 배분");
+        }
+        assertThat(generateNumbered()).isEqualTo("원가 배분");
+        assertThat(calls()).isEqualTo(1);
+        verify(transport).generate(anyString());
+    }
     void error(Runnable action,String code) {
         assertThatThrownBy(action::run).isInstanceOfSatisfying(LearningException.class,e -> assertThat(e.code()).isEqualTo(code));
     }
